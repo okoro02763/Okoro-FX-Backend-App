@@ -45,14 +45,25 @@ if SECRET_KEY.lower() in _PLACEHOLDER_SECRETS:
 
 # The Render host is always accepted so the service answers on its canonical
 # URL; DJANGO_ALLOWED_HOSTS *extends* this list for custom/staging domains.
-_RENDER_HOST = 'forex-trader-backend.onrender.com'
+# Render injects RENDER_EXTERNAL_HOSTNAME (e.g. okoro-fx-backend-app.onrender.com)
+# at runtime, so honor it automatically instead of hard-coding one service name.
+_RENDER_HOSTS = [
+    host.strip()
+    for host in (
+        os.getenv('RENDER_EXTERNAL_HOSTNAME', ''),
+        'okoro-fx-backend-app.onrender.com',
+    )
+    if host and host.strip()
+]
 _extra_allowed_hosts = [
     host.strip()
     for host in os.getenv('DJANGO_ALLOWED_HOSTS', '').split(',')
     if host.strip()
 ]
 ALLOWED_HOSTS = list(
-    dict.fromkeys([_RENDER_HOST, 'localhost', '127.0.0.1', *_extra_allowed_hosts])
+    dict.fromkeys(
+        [*_RENDER_HOSTS, 'localhost', '127.0.0.1', *_extra_allowed_hosts]
+    )
 )
 if not DEBUG and not _extra_allowed_hosts:
     raise ImproperlyConfigured(
@@ -105,6 +116,14 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# Disable the CommonMiddleware slash redirect. A 301 on an OPTIONS preflight
+# is rejected by the browser ("No 'Access-Control-Allow-Origin'"), and the API
+# routes already match with or without a trailing slash, so no redirect is ever
+# needed. (SECURE_SSL_REDIRECT stays on: Render terminates TLS and forwards
+# X-Forwarded-Proto, which SECURE_PROXY_SSL_HEADER honors, so preflights over
+# https are never redirected either.)
+APPEND_SLASH = False
+
 REST_FRAMEWORK = {
     # Fail closed: a view without an explicit decorator is never public.
     # The handful of genuinely public endpoints opt out with @permission_classes([AllowAny]).
@@ -126,12 +145,14 @@ REST_FRAMEWORK = {
 }
 
 # Explicit origin allowlist -- never CORS_ALLOW_ALL_ORIGINS in production.
-# Defaults cover the Vercel deployment plus the CRA (3000) and Vite (5173)
-# dev servers; override CORS_ALLOWED_ORIGINS to change them without a code deploy.
+# Defaults cover the Netlify and Vercel deployments plus the CRA (3000) and
+# Vite (5173) dev servers; override CORS_ALLOWED_ORIGINS to change them without
+# a code deploy.
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
         'CORS_ALLOWED_ORIGINS',
+        'https://okorofx.netlify.app,'
         'https://forex-trader-frontend.vercel.app,'
         'http://localhost:3000,'
         'http://localhost:5173',
@@ -160,6 +181,7 @@ CSRF_TRUSTED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
         'CSRF_TRUSTED_ORIGINS',
+        'https://okorofx.netlify.app,'
         'https://forex-trader-frontend.vercel.app,'
         'http://localhost:3000,'
         'http://localhost:5173',

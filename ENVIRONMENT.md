@@ -8,13 +8,16 @@ unambiguous.
 Required:
     SECRET_KEY           python -c "import secrets; print(secrets.token_urlsafe(64))"
     DJANGO_ALLOWED_HOSTS extra hostnames to accept, e.g. api.example.com
-                          (forex-trader-backend.onrender.com is always included)
+                          (okoro-fx-backend-app.onrender.com is always included,
+                          and RENDER_EXTERNAL_HOSTNAME is added automatically
+                          when Render sets it)
     DATABASE_URL         postgres://user:pass@host:5432/dbname
     PAYSTACK_SECRET_KEY  live secret (sk_live_...); test keys are rejected
 
 Strongly recommended:
     CORS_ALLOWED_ORIGINS comma-separated frontend origins.
-                          Default: https://forex-trader-frontend.vercel.app,
+                          Default: https://okorofx.netlify.app,
+                          https://forex-trader-frontend.vercel.app,
                           http://localhost:3000, http://localhost:5173
     CSRF_TRUSTED_ORIGINS same origins, needed for session-authenticated calls.
                           Defaults to the CORS list above.
@@ -36,7 +39,7 @@ CORS notes:
     browser reports "No 'Access-Control-Allow-Origin' header".
     CORS_ALLOW_ALL_ORIGINS is intentionally never enabled; list origins
     explicitly instead.
-    API routes accept the path with or without a trailing slash so the
-    frontend's slash-less calls are not answered with an APPEND_SLASH 301,
-    which a browser rejects on a preflight request.
+    API routes accept the path with or without a trailing slash and
+    APPEND_SLASH is disabled, so the frontend's slash-less calls are not
+    answered with a 301, which a browser rejects on a preflight request.
 """
