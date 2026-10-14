@@ -1,0 +1,15 @@
+Withdrawal update
+
+Hi {{ name }},
+
+There has been an update to your withdrawal request:
+
+  Amount requested: {{ amount }} NGN
+  Net payout:      {{ net_amount }} NGN
+  Reference:       {{ reference }}
+  Status:          {{ status }}
+{% if status_note %}
+  Note: {{ status_note }}
+{% endif %}
+{% if action_url %}View your account: {{ action_url }}
+{% endif %}— The OKORO FX team • Trade Global. Trade Smarter.

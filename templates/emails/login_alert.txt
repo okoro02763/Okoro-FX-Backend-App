@@ -1,0 +1,14 @@
+New sign-in detected
+
+Hi {{ name }},
+
+A new sign-in to your OKORO FX account just happened:
+
+  Time:      {{ login_time|date:"d M Y H:i T" }}
+  IP address: {{ ip_address|default:"Unknown" }}
+  Device:    {{ user_agent|default:"Unknown" }}
+
+{% if action_url %}This is me: {{ action_url }}
+{% endif %}If this wasn't you, change your password right away and contact support at {{ support_email }}.
+
+— The OKORO FX team • Trade Global. Trade Smarter.

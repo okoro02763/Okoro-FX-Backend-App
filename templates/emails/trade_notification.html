@@ -1,0 +1,43 @@
+{% extends "emails/base.html" %}
+{% block preheader %}A trade was executed on your OKORO FX account.{% endblock %}
+{% block heading %}Trade notification{% endblock %}
+{% block content %}
+  <div style="font-size:15px;line-height:1.7;color:#C6D6E8;">Hi {{ name }},</div>
+  <div style="font-size:15px;line-height:1.7;color:#C6D6E8;margin-top:10px;">
+    A trade on your OKORO FX account is now <strong>{{ status }}</strong>:
+  </div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;background-color:#0E2A45;border:1px solid #14334F;border-radius:8px;">
+    <tr>
+      <td style="padding:12px 16px;font-size:13px;line-height:1.7;color:#9FB3C8;">Currency pair</td>
+      <td style="padding:12px 16px;font-size:13px;line-height:1.7;color:#EAF2FA;">{{ symbol }}</td>
+    </tr>
+    <tr>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#9FB3C8;">Direction</td>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#EAF2FA;">{{ trade_type }}</td>
+    </tr>
+    <tr>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#9FB3C8;">Quantity (lots)</td>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#EAF2FA;">{{ quantity }}</td>
+    </tr>
+    <tr>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#9FB3C8;">Entry price</td>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#EAF2FA;">{{ entry_price }}</td>
+    </tr>
+    {% if exit_price %}
+    <tr>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#9FB3C8;">Exit price</td>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#EAF2FA;">{{ exit_price }}</td>
+    </tr>
+    {% endif %}
+    {% if profit_loss is not None %}
+    <tr>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#9FB3C8;">Profit / loss</td>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#EAF2FA;">{{ profit_loss }}</td>
+    </tr>
+    {% endif %}
+    <tr>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#9FB3C8;">Status</td>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#2DD4BF;font-weight:bold;">{{ status }}</td>
+    </tr>
+  </table>
+{% endblock %}

@@ -1,0 +1,19 @@
+{% extends "emails/base.html" %}
+{% block preheader %}You have been invited to join OKORO FX as an administrator.{% endblock %}
+{% block heading %}You're invited to OKORO FX{% endblock %}
+{% block content %}
+  <div style="font-size:15px;line-height:1.7;color:#C6D6E8;">Hi {{ name }},</div>
+  <div style="font-size:15px;line-height:1.7;color:#C6D6E8;margin-top:10px;">
+    {{ inviter }} has invited you to join OKORO FX as an administrator. Click
+    the button below to set up your admin account.
+  </div>
+{% endblock %}
+{% block note %}
+  <tr>
+    <td style="padding:14px 32px 0;">
+      <div style="font-size:13px;line-height:1.7;color:#9FB3C8;background-color:#0E2A45;border:1px solid #14334F;border-radius:8px;padding:14px 16px;">
+        This invitation link is single-use and expires once your account is created.
+      </div>
+    </td>
+  </tr>
+{% endblock %}

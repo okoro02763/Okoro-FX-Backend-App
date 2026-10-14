@@ -1,0 +1,10 @@
+You're invited to OKORO FX
+
+Hi {{ name }},
+
+{{ inviter }} has invited you to join OKORO FX as an administrator. Click the link below to set up your admin account.
+
+{% if action_url %}Accept invitation: {{ action_url }}
+{% endif %}This invitation link is single-use and expires once your account is created.
+
+— The OKORO FX team • Trade Global. Trade Smarter.

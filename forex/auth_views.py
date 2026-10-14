@@ -1,8 +1,8 @@
 import secrets
 import string
-import os
-from django.core.mail import send_mail
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import (
@@ -14,13 +14,14 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from .authentication import BearerTokenAuthentication
 from .permissions import IsAdminUser
+from .email_service import send_template_email
 from .models import AuditLog, Invite, PasswordResetToken, Profile
 from .referral import ensure_referral_code, process_referral
 
 User = get_user_model()
 
 # Base URL of the frontend, used when constructing password-reset links.
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+FRONTEND_URL = settings.FRONTEND_URL
 
 
 def _with_profile(user):
@@ -28,15 +29,31 @@ def _with_profile(user):
     return profile
 
 
-def _send_email(subject, body, to_email):
-    """Send an email if SMTP is configured; otherwise log the body for local dev."""
-    if to_email and os.getenv('EMAIL_PASSWORD'):
-        try:
-            send_mail(subject, body, None, [to_email], fail_silently=False)
-            return
-        except Exception as exc:  # noqa: BLE001
-            print(f"[email-error] {exc}")
-    print(f"[email-debug] subject={subject!r} to={to_email!r}\n{body}")
+def _send_email(
+    subject,
+    body,
+    to_email,
+    action_url=None,
+    action_label=None,
+    name=None,
+    html_template=None,
+):
+    """Legacy free-form helper kept for backward compatibility.
+
+    Prefer ``email_service.send_template_email`` for transactional emails. This
+    thin shim renders through the ``welcome`` template (the codebase's generic
+    layout) so callers that only have subject + body keep working.
+    """
+    return send_template_email(
+        'welcome',
+        to_email,
+        {
+            'name': name or 'there',
+            'action_url': action_url,
+            'action_label': action_label or 'Continue',
+            'message': body,
+        },
+    )
 
 
 def serialize_user(user):
@@ -81,6 +98,23 @@ def login(request):
         )
 
     token, _ = Token.objects.get_or_create(user=user)
+
+    # Login alert -- fire-and-forget, never blocks the sign-in response.
+    ip_address = (
+        (request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')[0].strip()
+        or request.META.get('REMOTE_ADDR', '')
+    )
+    send_template_email(
+        'login_alert',
+        user.email,
+        {
+            'name': user.first_name or 'there',
+            'ip_address': ip_address or 'Unknown',
+            'user_agent': request.META.get('HTTP_USER_AGENT', '') or 'Unknown',
+            'login_time': timezone.localtime(),
+        },
+    )
+
     return Response({'token': token.key, 'user': serialize_user(user)})
 
 
@@ -126,6 +160,18 @@ def signup(request):
         process_referral(user, referral_code)
 
     token = Token.objects.create(user=user)
+
+    send_template_email(
+        'welcome',
+        user.email,
+        {
+            'name': name,
+            'action_url': FRONTEND_URL,
+            'action_label': 'Open OKORO FX',
+        },
+        defer=True,
+    )
+
     return Response(
         {'token': token.key, 'user': serialize_user(user)},
         status=status.HTTP_201_CREATED,
@@ -151,15 +197,16 @@ def forgot_password(request):
             key=secrets.token_urlsafe(32),
         )
         reset_url = f"{FRONTEND_URL}/reset-password/{token.key}"
-        _send_email(
-            'OKORO FX - Reset your password',
-            f"Hi {user.first_name or 'there'},\n\n"
-            "You requested to reset your password. Click the link below (valid for one use):\n\n"
-            f"{reset_url}\n\n"
-            "If you didn't request this, you can ignore this email.\n\n"
-"— The OKORO FX team · Your Gateway To Global Markets",
-        user.email,
-    )
+        send_template_email(
+            'password_reset',
+            user.email,
+            {
+                'name': user.first_name or 'there',
+                'action_url': reset_url,
+                'action_label': 'Reset Password',
+            },
+            defer=True,
+        )
 
     return Response(
         {'message': 'If that email is registered, a reset link has been sent.'}
@@ -190,6 +237,13 @@ def reset_password(request):
     reset.user.save()
     reset.used = True
     reset.save()
+
+    send_template_email(
+        'password_changed',
+        reset.user.email,
+        {'name': reset.user.first_name or 'there'},
+        defer=True,
+    )
 
     return Response({'message': 'Your password has been reset.'})
 
@@ -246,16 +300,16 @@ def invite_user(request):
         )
 
     invite_url = f"{FRONTEND_URL}/signup?invite={invite.token}"
-    _send_email(
-        'OKORO FX - You are invited as an admin',
-        f"Hi,\n\n"
-        f"{request.user.first_name or request.user.email} has invited you to join "
-        "OKORO FX as an administrator.\n\n"
-        f"Open the link below to set up your admin account:\n\n"
-        f"{invite_url}\n\n"
-        "This link is single-use and expires once your account is created.\n\n"
-        "— The OKORO FX team · Your Gateway To Global Markets",
+    send_template_email(
+        'admin_invite',
         email,
+        {
+            'name': 'there',
+            'inviter': request.user.first_name or request.user.email or 'Admin',
+            'action_url': invite_url,
+            'action_label': 'Accept Invitation',
+        },
+        defer=True,
     )
 
     _log(request.user, 'admin.invited', email)
@@ -348,5 +402,12 @@ def change_password(request):
     profile = _with_profile(request.user)
     profile.must_change_password = False
     profile.save()
+
+    send_template_email(
+        'password_changed',
+        request.user.email,
+        {'name': request.user.first_name or 'there'},
+        defer=True,
+    )
 
     return Response({'message': 'Password updated.'})

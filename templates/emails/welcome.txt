@@ -1,0 +1,8 @@
+Welcome to OKORO FX
+
+Hi {{ name }},
+
+Welcome to OKORO FX — your gateway to global markets. Your account is ready: sign in, fund your wallet and start trading world currencies the smarter way.
+
+{% if action_url %}Open OKORO FX: {{ action_url }}
+{% endif %}— The OKORO FX team • Trade Global. Trade Smarter.

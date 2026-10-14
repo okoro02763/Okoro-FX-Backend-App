@@ -20,7 +20,10 @@ import dj_database_url
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv()
+# Load the project's .env explicitly. python-dotenv's auto-discovery resolved to
+# a stale backend/backend/.env and silently dropped DATABASE_URL and the email
+# transport config, so the app fell back to SQLite and console email.
+load_dotenv(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
@@ -74,9 +77,26 @@ if not DEBUG and not _extra_allowed_hosts:
 # ===========================
 # Email Configuration
 # ===========================
-EMAIL_BACKEND = os.getenv(
-    'EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend'
-)
+# Termii (https://developers.termii.com) is a template-based email API, so when
+# TERMII_API_KEY is present it becomes the default transport. An explicit
+# EMAIL_BACKEND always wins; otherwise we fall back to SMTP, or to the console
+# backend in local DEBUG when no transport is configured.
+TERMII_API_KEY = os.getenv('TERMII_API_KEY', '')
+TERMII_BASE_URL = os.getenv('TERMII_BASE_URL', 'https://v4.api.termii.com')
+TERMII_EMAIL_CONFIG_ID = os.getenv('TERMII_EMAIL_CONFIG_ID', '')
+TERMII_TEMPLATE_ID = os.getenv('TERMII_TEMPLATE_ID', '')
+TERMII_BODY_VARIABLE = os.getenv('TERMII_BODY_VARIABLE', 'message')
+TERMII_TIMEOUT = int(os.getenv('TERMII_TIMEOUT', '30'))
+
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', '')
+if not EMAIL_BACKEND:
+    if TERMII_API_KEY:
+        EMAIL_BACKEND = 'forex.email_backend.TermiiEmailBackend'
+    elif DEBUG:
+        EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+    else:
+        EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '465'))
 EMAIL_HOST_USER = os.getenv('EMAIL_USER', '')
@@ -84,6 +104,16 @@ EMAIL_HOST_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
 EMAIL_USE_SSL = os.getenv('EMAIL_SECURE', 'true').lower() == 'true'
 EMAIL_USE_TLS = os.getenv('EMAIL_TLS', 'false').lower() == 'true'
 DEFAULT_FROM_EMAIL = os.getenv('EMAIL_GENERAL', EMAIL_HOST_USER)
+
+# Public frontend URL used to build confirmation/reset/invite links. The
+# auth_views module used to read FRONTEND_URL itself; it is centralised here so
+# the email service and every caller agree on the value.
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+# Address shown in the support section and footer of rendered email templates.
+DEFAULT_SUPPORT_EMAIL = os.getenv('DEFAULT_SUPPORT_EMAIL', 'support@okorofx.com')
+# Optional hosted copy of the brand logo used in the email header. Only
+# rendered when set -- never assume a public asset URL exists.
+BRAND_LOGO_URL = os.getenv('BRAND_LOGO_URL', '')
 ADMIN_PANEL_URL = os.getenv('ADMIN_PANEL_URL', '')
 
 
@@ -205,7 +235,7 @@ ROOT_URLCONF = 'backend.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [

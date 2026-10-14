@@ -1,0 +1,16 @@
+Trade notification
+
+Hi {{ name }},
+
+A trade on your OKORO FX account is now {{ status }}:
+
+  Currency pair: {{ symbol }}
+  Direction:     {{ trade_type }}
+  Quantity(lots): {{ quantity }}
+  Entry price:   {{ entry_price }}
+{% if exit_price %}  Exit price:    {{ exit_price }}
+{% endif %}{% if profit_loss is not None %}  Profit / loss: {{ profit_loss }}
+{% endif %}  Status:        {{ status }}
+
+{% if action_url %}View your account: {{ action_url }}
+{% endif %}— The OKORO FX team • Trade Global. Trade Smarter.

@@ -403,6 +403,21 @@ def paystack_webhook(request):
             },
         )
 
+    from .email_service import send_template_email  # local import to avoid cycle
+
+    send_template_email(
+        'deposit_confirmation',
+        locked.user.email,
+        {
+            'name': locked.user.first_name or 'there',
+            'amount': f'{locked.credit_amount}',
+            'currency': 'NGN',
+            'reference': reference,
+            'status': 'success',
+        },
+        defer=True,
+    )
+
     return Response({'message': 'Received'})
 
 def _withdrawal_serialize(w):

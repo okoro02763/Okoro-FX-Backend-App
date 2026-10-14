@@ -12,3 +12,6 @@ env/
 # Django
 db.sqlite3
 staticfiles/
+
+# Logs
+*.log

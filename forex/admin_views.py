@@ -390,6 +390,22 @@ def review_withdrawal(request, withdrawal_id):
         withdrawal.reviewed_at = timezone.now()
         withdrawal.save()
 
+    from .email_service import send_template_email
+
+    send_template_email(
+        'withdrawal_update',
+        withdrawal.user.email,
+        {
+            'name': withdrawal.user.first_name or 'there',
+            'amount': f'{withdrawal.amount}',
+            'net_amount': f'{withdrawal.net_amount}',
+            'reference': str(withdrawal.id),
+            'status': new_status,
+            'status_note': note,
+        },
+        defer=True,
+    )
+
     _log(
         request.user,
         f'withdrawal.{new_status}',

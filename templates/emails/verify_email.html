@@ -1,0 +1,20 @@
+{% extends "emails/base.html" %}
+{% block preheader %}Confirm your email to unlock your OKORO FX account.{% endblock %}
+{% block heading %}Confirm your email address{% endblock %}
+{% block content %}
+  <div style="font-size:15px;line-height:1.7;color:#C6D6E8;">Hi {{ name }},</div>
+  <div style="font-size:15px;line-height:1.7;color:#C6D6E8;margin-top:10px;">
+    To keep your account secure, please confirm that this email address belongs
+    to you. Click the button below to verify your address and finish setting up
+    your OKORO FX account.
+  </div>
+{% endblock %}
+{% block note %}
+  <tr>
+    <td style="padding:14px 32px 0;">
+      <div style="font-size:13px;line-height:1.7;color:#9FB3C8;background-color:#0E2A45;border:1px solid #14334F;border-radius:8px;padding:14px 16px;">
+        If you didn't create an OKORO FX account, you can ignore this email.
+      </div>
+    </td>
+  </tr>
+{% endblock %}

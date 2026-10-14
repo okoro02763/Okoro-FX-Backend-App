@@ -240,6 +240,22 @@ def place_trade(request):
                 logger.error("Deriv API error: %s", result.get('error'))
         else:
             logger.warning("Deriv API not connected, trade placed locally only")
+
+        from .email_service import send_template_email
+
+        send_template_email(
+            'trade_notification',
+            request.user.email,
+            {
+                'name': request.user.first_name or 'there',
+                'symbol': symbol,
+                'trade_type': trade_type,
+                'quantity': f'{quantity}',
+                'entry_price': f'{entry_price}',
+                'status': 'OPEN',
+            },
+            defer=True,
+        )
         
         return Response({
             'trade_id': trade.id,
@@ -289,6 +305,24 @@ def close_trade(request, trade_id):
         trade.status = 'CLOSED'
         trade.closed_at = timezone.now()
         trade.save()
+
+        from .email_service import send_template_email
+
+        send_template_email(
+            'trade_notification',
+            request.user.email,
+            {
+                'name': request.user.first_name or 'there',
+                'symbol': trade.currency_pair.symbol,
+                'trade_type': trade.trade_type,
+                'quantity': f'{trade.quantity}',
+                'entry_price': f'{trade.entry_price}',
+                'exit_price': f'{trade.exit_price}',
+                'profit_loss': f'{trade.profit_loss}',
+                'status': 'CLOSED',
+            },
+            defer=True,
+        )
         
         return Response({
             'message': 'Trade closed successfully',

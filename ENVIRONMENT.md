@@ -23,6 +23,13 @@ Strongly recommended:
                           Defaults to the CORS list above.
     FRONTEND_URL         used to build password-reset and invite links
     EMAIL_HOST / EMAIL_USER / EMAIL_PASSWORD / EMAIL_GENERAL
+    TERMII_API_KEY       enables the Termii email backend (takes priority
+                         over SMTP). Requires TERMII_EMAIL_CONFIG_ID and
+                         TERMII_TEMPLATE_ID from the Termii dashboard; the
+                         template must include the {{message}} placeholder
+                         (override the name with TERMII_BODY_VARIABLE).
+                         Optional: TERMII_BASE_URL (default
+                         https://v4.api.termii.com), TERMII_TIMEOUT.
     DERIV_API_TOKEN / DERIV_APP_ID
     THROTTLE_ANON        e.g. 60/hour
     THROTTLE_USER        e.g. 600/hour

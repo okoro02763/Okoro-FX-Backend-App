@@ -1,0 +1,10 @@
+Confirm your email address
+
+Hi {{ name }},
+
+To keep your account secure, please confirm that this email address belongs to you. Click the link below to verify your address and finish setting up your OKORO FX account.
+
+{% if action_url %}Verify my email: {{ action_url }}
+{% endif %}If you didn't create an OKORO FX account, you can ignore this email.
+
+— The OKORO FX team • Trade Global. Trade Smarter.

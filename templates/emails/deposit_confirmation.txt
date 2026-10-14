@@ -1,0 +1,12 @@
+Deposit confirmed
+
+Hi {{ name }},
+
+Your deposit was confirmed and the funds have been credited to your wallet.
+
+  Amount credited: {{ amount }} {{ currency }}
+  Reference:      {{ reference }}
+  Status:         {{ status }}
+
+{% if action_url %}View your account: {{ action_url }}
+{% endif %}— The OKORO FX team • Trade Global. Trade Smarter.

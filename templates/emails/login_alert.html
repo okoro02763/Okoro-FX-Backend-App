@@ -1,0 +1,33 @@
+{% extends "emails/base.html" %}
+{% block preheader %}A new sign-in was detected on your OKORO FX account.{% endblock %}
+{% block heading %}New sign-in detected{% endblock %}
+{% block content %}
+  <div style="font-size:15px;line-height:1.7;color:#C6D6E8;">Hi {{ name }},</div>
+  <div style="font-size:15px;line-height:1.7;color:#C6D6E8;margin-top:10px;">
+    A new sign-in to your OKORO FX account just happened:
+  </div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;background-color:#0E2A45;border:1px solid #14334F;border-radius:8px;">
+    <tr>
+      <td style="padding:12px 16px;font-size:13px;line-height:1.7;color:#9FB3C8;">Time</td>
+      <td style="padding:12px 16px;font-size:13px;line-height:1.7;color:#EAF2FA;">{{ login_time|date:"d M Y H:i T" }}</td>
+    </tr>
+    <tr>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#9FB3C8;">IP address</td>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#EAF2FA;">{{ ip_address|default:"Unknown" }}</td>
+    </tr>
+    <tr>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#9FB3C8;">Browser / device</td>
+      <td style="padding:0 16px 12px;font-size:13px;line-height:1.7;color:#EAF2FA;">{{ user_agent|default:"Unknown" }}</td>
+    </tr>
+  </table>
+{% endblock %}
+{% block note %}
+  <tr>
+    <td style="padding:14px 32px 0;">
+      <div style="font-size:13px;line-height:1.7;color:#9FB3C8;background-color:#0E2A45;border:1px solid #14334F;border-radius:8px;padding:14px 16px;">
+        If this wasn't you, change your password right away and contact support
+        at <a href="mailto:{{ support_email }}" style="color:#2DD4BF;text-decoration:none;">{{ support_email }}</a>.
+      </div>
+    </td>
+  </tr>
+{% endblock %}
