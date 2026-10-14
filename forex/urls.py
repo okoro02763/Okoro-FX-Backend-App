@@ -41,6 +41,7 @@ urlpatterns = [
     # Auth
     api_route('auth/login', auth_views.login, name='auth-login'),
     api_route('auth/signup', auth_views.signup, name='auth-signup'),
+    api_route('auth/validate-referral', auth_views.validate_referral, name='auth-validate-referral'),
     api_route('auth/forgot-password', auth_views.forgot_password, name='auth-forgot-password'),
     api_route('auth/reset-password', auth_views.reset_password, name='auth-reset-password'),
     api_route('auth/me', auth_views.me, name='auth-me'),

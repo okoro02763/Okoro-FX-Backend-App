@@ -10,6 +10,7 @@ from django.urls import reverse
 from rest_framework.authtoken.models import Token
 
 from .models import Payment, Profile, Withdrawal
+from .referral import ensure_referral_code
 
 User = get_user_model()
 
@@ -328,3 +329,50 @@ class FeeTests(TestCase):
         # 0.00 under Python's default banker's rounding.
         self.assertEqual(compute_fee('0.5', '1'), Decimal('0.01'))
         self.assertEqual(compute_fee('1000', '1.5'), Decimal('15.00'))
+
+
+class ReferralValidatorTests(TestCase):
+    """Signup must reject an unknown referral code instead of ignoring it."""
+
+    def setUp(self):
+        self.referrer = User.objects.create_user(
+            username='ref@example.com',
+            email='ref@example.com',
+            password='pw12345',
+            first_name='Ref',
+        )
+        self.profile = Profile.objects.create(user=self.referrer)
+        ensure_referral_code(self.profile)
+
+    def _signup(self, email, code=None):
+        body = {'name': 'A', 'email': email, 'password': 'pw12345'}
+        if code is not None:
+            body['referralCode'] = code
+        return self.client.post(
+            reverse('auth-signup'),
+            data=json.dumps(body),
+            content_type='application/json',
+        )
+
+    def test_signup_rejects_unknown_referral_code(self):
+        resp = self._signup('a@example.com', 'NOPE1234')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()['message'], 'Invalid referral code.')
+        self.assertFalse(User.objects.filter(email='a@example.com').exists())
+
+    def test_signup_accepts_valid_referral_code(self):
+        resp = self._signup('b@example.com', self.profile.referral_code.lower())
+        self.assertEqual(resp.status_code, 201)
+        user = User.objects.get(email='b@example.com')
+        self.assertEqual(user.profile.reffered_by_id, self.referrer.id)
+
+    def test_validate_endpoint(self):
+        bad = self.client.get(reverse('auth-validate-referral'), {'code': 'NOPE1234'})
+        self.assertEqual(bad.status_code, 200)
+        self.assertFalse(bad.json()['valid'])
+
+        good = self.client.get(
+            reverse('auth-validate-referral'), {'code': self.profile.referral_code}
+        )
+        self.assertTrue(good.json()['valid'])
+        self.assertEqual(good.json()['referrer'], 'Ref')

@@ -16,7 +16,7 @@ from .authentication import BearerTokenAuthentication
 from .permissions import IsAdminUser
 from .email_service import send_template_email
 from .models import AuditLog, Invite, PasswordResetToken, Profile
-from .referral import ensure_referral_code, process_referral
+from .referral import ensure_referral_code, get_referrer_profile, process_referral
 
 User = get_user_model()
 
@@ -138,6 +138,17 @@ def signup(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # Validate an optional referral code *before* creating anything, so an
+    # unknown code is reported instead of being silently ignored.
+    referral_code = (
+        request.data.get('referralCode') or request.data.get('referral_code') or ''
+    ).strip().upper()
+    if referral_code and not get_referrer_profile(referral_code):
+        return Response(
+            {'message': 'Invalid referral code.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     user = User.objects.create_user(
         username=email,
         email=email,
@@ -154,8 +165,7 @@ def signup(request):
 
     ensure_referral_code(profile)
 
-    # Apply an optional referral code supplied at signup.
-    referral_code = (request.data.get('referralCode') or request.data.get('referral_code') or '').strip()
+    # Apply the validated referral code.
     if referral_code and not is_first:
         process_referral(user, referral_code)
 
@@ -176,6 +186,28 @@ def signup(request):
         {'token': token.key, 'user': serialize_user(user)},
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([AllowAny])
+def validate_referral(request):
+    """Check whether a referral code exists. -> { valid, referrer? }
+
+    Used by the signup form to flag a wrong invite code before submitting.
+    """
+    code = (
+        request.query_params.get('code')
+        or request.data.get('code')
+        or request.data.get('referralCode')
+        or request.data.get('referral_code')
+        or ''
+    ).strip().upper()
+
+    profile = get_referrer_profile(code)
+    payload = {'valid': bool(profile)}
+    if profile:
+        payload['referrer'] = profile.user.first_name or profile.user.username or ''
+    return Response(payload)
 
 
 @api_view(['POST'])

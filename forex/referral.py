@@ -29,6 +29,24 @@ def ensure_referral_code(profile):
     return profile.referral_code
 
 
+def get_referrer_profile(code):
+    """Return the Profile that owns ``code`` (case-insensitive), or None.
+
+    Used both to validate an invite code before signup and to resolve the
+    referrer when a referral is applied.
+    """
+    if not code:
+        return None
+    normalized = code.strip().upper()
+    if not normalized:
+        return None
+    return (
+        Profile.objects.filter(referral_code=normalized)
+        .select_related('user')
+        .first()
+    )
+
+
 def process_referral(new_user, code, reward_referrer=REFERRER_REWARD, reward_referee=REFEREE_REWARD):
     """
     Called at signup with a referral code. If the code is valid and doesn't
@@ -36,15 +54,13 @@ def process_referral(new_user, code, reward_referrer=REFERRER_REWARD, reward_ref
 
     Returns the created Referral or None.
     """
-    if not code:
-        return None
-
-    code = code.strip().upper()
-    referrer_profile = Profile.objects.filter(referral_code=code).select_related('user').first()
+    referrer_profile = get_referrer_profile(code)
     if not referrer_profile:
         return None
     if referrer_profile.user_id == new_user.id:
         return None
+
+    code = code.strip().upper()
 
     new_profile = _profile_for(new_user)
 
