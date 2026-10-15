@@ -156,17 +156,13 @@ def signup(request):
         password=password,
     )
 
-    # First registered account becomes admin so the platform can be managed.
-    is_first = not User.objects.exclude(id=user.id).exists()
+    # Every signup is a regular user. Admins are created only via an invite
+    # (see ``accept_invite``) or promoted explicitly through the admin API.
     profile = _with_profile(user)
-    if is_first:
-        profile.role = 'admin'
-        profile.save()
-
     ensure_referral_code(profile)
 
     # Apply the validated referral code.
-    if referral_code and not is_first:
+    if referral_code:
         process_referral(user, referral_code)
 
     token = Token.objects.create(user=user)

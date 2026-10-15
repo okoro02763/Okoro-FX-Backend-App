@@ -5,6 +5,7 @@ from decimal import Decimal
 from unittest import mock
 
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.authtoken.models import Token
@@ -376,3 +377,39 @@ class ReferralValidatorTests(TestCase):
         )
         self.assertTrue(good.json()['valid'])
         self.assertEqual(good.json()['referrer'], 'Ref')
+
+
+class SignupRoleTests(TestCase):
+    """Signing up must never grant admin -- admins come from invites only."""
+
+    def test_first_signup_is_a_regular_user(self):
+        self.assertEqual(User.objects.count(), 0)
+        resp = self.client.post(
+            reverse('auth-signup'),
+            data=json.dumps(
+                {'name': 'First', 'email': 'first@example.com', 'password': 'pw12345'}
+            ),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.json()['user']['role'], 'user')
+        self.assertEqual(
+            User.objects.get(email='first@example.com').profile.role, 'user'
+        )
+
+    def test_set_role_command_promotes_and_demotes(self):
+        user = User.objects.create_user(
+            username='cmd@example.com',
+            email='cmd@example.com',
+            password='pw12345',
+        )
+        Profile.objects.create(user=user)
+
+        call_command('set_role', 'cmd@example.com', 'admin')
+        user.profile.refresh_from_db()
+        self.assertEqual(user.profile.role, 'admin')
+
+        call_command('set_role', 'cmd@example.com', 'user')
+        user.profile.refresh_from_db()
+        self.assertEqual(user.profile.role, 'user')
+
