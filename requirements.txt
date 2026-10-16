@@ -1,8 +1,13 @@
 django>=4.2,<5.0
 djangorestframework>=3.14
+channels>=4.0
+channels-redis>=4.2
+daphne>=4.1
 django-cors-headers>=4.0
 python-dotenv>=1.0
 gunicorn>=21.2
+celery>=5.3
+redis>=5.0
 Pillow>=10.0
 pandas>=2.0
 requests>=2.31

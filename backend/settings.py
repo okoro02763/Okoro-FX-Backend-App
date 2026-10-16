@@ -120,6 +120,9 @@ ADMIN_PANEL_URL = os.getenv('ADMIN_PANEL_URL', '')
 # Application definition
 
 INSTALLED_APPS = [
+    # daphne must precede staticfiles so `runserver` serves the ASGI
+    # application (and therefore WebSockets) during development.
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -127,9 +130,12 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'forex',
+    'market',
+    'trading',
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
+    'channels',
 ]
 
 MIDDLEWARE = [
@@ -249,6 +255,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'backend.wsgi.application'
+ASGI_APPLICATION = 'backend.asgi.application'
 
 
 # Database
@@ -339,5 +346,56 @@ DERIV_API_URL = os.getenv('DERIV_API_URL', 'wss://ws.binaryws.com/websockets/v3'
 DERIV_APP_ID = os.getenv('DERIV_APP_ID', '1089')
 
 # Celery Configuration
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+# Celery is optional: when the worker/beat are running (docker-compose), beat
+# triggers trading.settle_expired_trades every CELERY_SETTLE_INTERVAL seconds.
+# Without a worker the demo still settles correctly via lazy settlement (trade
+# list reads, the price-stream consumer sweep, and `manage.py settle_trades`).
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv(
+    'CELERY_RESULT_BACKEND', CELERY_BROKER_URL
+)
+CELERY_TASK_TIME_LIMIT = int(os.getenv('CELERY_TASK_TIME_LIMIT', '60'))
+CELERY_BEAT_SCHEDULE = {
+    'settle-expired-trades': {
+        'task': 'trading.settle_expired_trades',
+        'schedule': float(os.getenv('CELERY_SETTLE_INTERVAL', '5')),
+    },
+}
+
+# ===========================
+# Channels / WebSockets
+# ===========================
+# In-memory layer by default so the demo runs with zero extra services.
+# Set REDIS_URL (or CHANNEL_REDIS_URL) to use a shared Redis channel layer
+# across multiple worker processes.
+_redis_url = os.getenv('CHANNEL_REDIS_URL', os.getenv('REDIS_URL', '')).strip()
+if _redis_url:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {'hosts': [_redis_url]},
+        }
+    }
+else:
+    CHANNEL_LAYERS = {
+        'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}
+    }
+
+# ===========================
+# Binary options / market data
+# ===========================
+# Twelve Data supplies forex, commodity and stock quotes. The key is optional:
+# without it the market app serves a deterministic simulated feed so the demo
+# still runs offline. See market/providers.py.
+TWELVE_DATA_API_KEY = os.getenv('TWELVE_DATA_API_KEY', '').strip()
+TWELVE_DATA_BASE_URL = os.getenv(
+    'TWELVE_DATA_BASE_URL', 'https://api.twelvedata.com'
+).rstrip('/')
+# Seconds a quote is cached to avoid burning the free-tier credit budget.
+MARKET_QUOTE_TTL = int(os.getenv('MARKET_QUOTE_TTL', '3'))
+# Price-stream tick cadence (WebSocket) and how often each stream also sweeps
+# expired trades so results land close to expiry without a Celery worker.
+MARKET_TICK_SECONDS = float(os.getenv('MARKET_TICK_SECONDS', '2'))
+MARKET_SETTLE_EVERY_N_TICKS = int(os.getenv('MARKET_SETTLE_EVERY_N_TICKS', '2'))
+# Default demo balance granted to new wallets.
+DEMO_STARTING_BALANCE = Decimal(os.getenv('DEMO_STARTING_BALANCE', '10000'))
