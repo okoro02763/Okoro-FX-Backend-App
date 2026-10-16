@@ -15,3 +15,11 @@ def settle_expired_trades_task() -> int:
     from .services import settle_expired_trades
 
     return settle_expired_trades()
+
+
+@shared_task(name='trading.process_pending_orders')
+def process_pending_orders_task() -> int:
+    """Open any pending order whose time/price trigger has been reached."""
+    from .services import process_pending_orders
+
+    return process_pending_orders()

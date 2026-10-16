@@ -61,12 +61,17 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         created_count = 0
         for order, (symbol, name, category, payout, base_price, volatility) in enumerate(INSTRUMENTS):
+            payout = Decimal(payout)
+            # Longer expiries pay a small premium over the short column.
+            long_payout = min(Decimal('95.00'), payout + Decimal('3.00'))
             _, created = Instrument.objects.update_or_create(
                 symbol=symbol,
                 defaults={
                     'name': name,
                     'category': category,
-                    'payout_percent': Decimal(payout),
+                    'payout_percent': payout,
+                    'payout_percent_short': payout,
+                    'payout_percent_long': long_payout,
                     'base_price': Decimal(base_price),
                     'volatility': Decimal(volatility),
                     'is_active': True,

@@ -91,3 +91,65 @@ class Trade(models.Model):
 
 def default_expiry(seconds: int = 60):
     return timezone.now() + timedelta(seconds=seconds)
+
+
+class PendingOrder(models.Model):
+    """A scheduled binary option.
+
+    The order waits until either a wall-clock time (``trigger_time``) or a
+    market price (``trigger_price``) is reached, then opens a normal ``Trade``
+    with the recorded direction/stake and ``expiry_seconds`` duration.
+    """
+
+    DIRECTION_CHOICES = Trade.DIRECTION_CHOICES
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('placed', 'Placed'),
+        ('cancelled', 'Cancelled'),
+        # The window passed or the wallet could not cover the stake.
+        ('failed', 'Failed'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='pending_orders',
+    )
+    instrument = models.ForeignKey(
+        'market.Instrument',
+        on_delete=models.PROTECT,
+        related_name='pending_orders',
+    )
+    direction = models.CharField(max_length=4, choices=DIRECTION_CHOICES)
+    stake = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('10.00'))
+    # Duration of the trade opened once the order triggers.
+    expiry_seconds = models.IntegerField(default=60)
+
+    trigger_time = models.DateTimeField(null=True, blank=True)
+    trigger_price = models.DecimalField(
+        max_digits=18, decimal_places=8, null=True, blank=True
+    )
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    # The trade created when the order fired (null until then).
+    trade = models.OneToOneField(
+        Trade,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='pending_order',
+    )
+    note = models.CharField(max_length=200, blank=True, default='')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    placed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'trigger_time']),
+            models.Index(fields=['user', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.get_direction_display()} {self.instrument.symbol} {self.status} ({self.stake})'

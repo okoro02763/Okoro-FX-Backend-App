@@ -19,7 +19,7 @@ from django.utils import timezone
 
 from market.services import get_instrument, get_quote
 
-from .models import Trade, Wallet
+from .models import PendingOrder, Trade, Wallet
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,9 @@ def open_trade(user, symbol, direction, stake, duration_seconds=None, expiry_tim
     if open_price <= 0:
         raise TradeError('Market price is not usable right now, try again')
 
-    payout_percent = instrument.payout_percent
+    # The payout depends on how long the trade runs (short vs long column).
+    duration_for_payout = (expiry_time - now).total_seconds()
+    payout_percent = instrument.payout_for_duration(duration_for_payout)
     # Potential gross payout on a win: the stake comes back plus the profit.
     gross_payout = money(stake * (Decimal('1') + payout_percent / Decimal('100')))
 
@@ -189,3 +191,163 @@ def settle_expired_trades() -> int:
         if settle_trade(pk) is not None:
             settled += 1
     return settled
+
+
+# --- Pending (scheduled) orders ------------------------------------------------
+
+MIN_PENDING_TRIGGER_SECONDS = 5
+MAX_PENDING_TRIGGER_SECONDS = 86400
+
+
+def create_pending_order(
+    user,
+    symbol,
+    direction,
+    stake,
+    expiry_seconds=60,
+    trigger_time=None,
+    trigger_price=None,
+) -> PendingOrder:
+    """Schedule a trade for a future time or price.
+
+    Exactly one trigger is required. The stake is *not* reserved here; it is
+    only checked and locked when the order actually fires.
+    """
+    instrument = get_instrument(symbol)
+    if instrument is None:
+        raise TradeError(f'Unknown or inactive symbol: {symbol}')
+
+    direction = (direction or '').strip().lower()
+    if direction not in ('buy', 'sell'):
+        raise TradeError('direction must be "buy" or "sell"')
+
+    try:
+        stake = money(stake)
+    except Exception as exc:
+        raise TradeError('stake must be a number') from exc
+    if stake < MIN_STAKE:
+        raise TradeError(f'Minimum stake is {MIN_STAKE}')
+    if stake > MAX_STAKE:
+        raise TradeError(f'Maximum stake is {MAX_STAKE}')
+
+    try:
+        expiry_seconds = int(expiry_seconds or 60)
+    except (TypeError, ValueError) as exc:
+        raise TradeError('expiry_seconds must be an integer') from exc
+    if not (MIN_DURATION_SECONDS <= expiry_seconds <= MAX_DURATION_SECONDS):
+        raise TradeError(
+            f'expiry_seconds must be between {MIN_DURATION_SECONDS} '
+            f'and {MAX_DURATION_SECONDS}'
+        )
+
+    has_time = trigger_time is not None
+    has_price = trigger_price is not None
+    if has_time == has_price:
+        raise TradeError('Provide exactly one of trigger_time or trigger_price')
+
+    now = timezone.now()
+    if has_time:
+        try:
+            if timezone.is_naive(trigger_time):
+                trigger_time = timezone.make_aware(trigger_time, timezone=dt_timezone.utc)
+            trigger_time = trigger_time.astimezone(dt_timezone.utc)
+        except Exception as exc:
+            raise TradeError('trigger_time must be an ISO-8601 datetime') from exc
+        gap = (trigger_time - now).total_seconds()
+        if not (MIN_PENDING_TRIGGER_SECONDS <= gap <= MAX_PENDING_TRIGGER_SECONDS):
+            raise TradeError(
+                f'trigger_time must be between {MIN_PENDING_TRIGGER_SECONDS}s and '
+                f'{MAX_PENDING_TRIGGER_SECONDS}s in the future'
+            )
+    else:
+        try:
+            trigger_price = Decimal(str(trigger_price))
+        except Exception as exc:
+            raise TradeError('trigger_price must be a number') from exc
+        if trigger_price <= 0:
+            raise TradeError('trigger_price must be greater than zero')
+
+    return PendingOrder.objects.create(
+        user=user,
+        instrument=instrument,
+        direction=direction,
+        stake=stake,
+        expiry_seconds=expiry_seconds,
+        trigger_time=trigger_time if has_time else None,
+        trigger_price=trigger_price if has_price else None,
+    )
+
+
+def cancel_pending_order(user, order_pk) -> PendingOrder:
+    with transaction.atomic():
+        order = (
+            PendingOrder.objects.select_for_update()
+            .filter(pk=order_pk, user=user)
+            .first()
+        )
+        if order is None:
+            raise TradeError('Pending order not found')
+        if order.status != 'pending':
+            raise TradeError('Only pending orders can be cancelled')
+        order.status = 'cancelled'
+        order.save(update_fields=['status'])
+    return order
+
+
+def _trigger_ready(order: PendingOrder, now) -> bool:
+    if order.trigger_time is not None:
+        return now >= order.trigger_time
+    if order.trigger_price is not None:
+        quote = get_quote(order.instrument.symbol)
+        if not quote:
+            return False
+        price = Decimal(str(quote['price']))
+        if order.direction == 'buy':
+            return price <= order.trigger_price
+        return price >= order.trigger_price
+    return False
+
+
+def process_pending_orders() -> int:
+    """Fire every pending order whose trigger has been reached.
+
+    Returns the number of orders successfully placed. Idempotent: each order is
+    locked and only transitioned while still ``pending``, so a double run never
+    opens two trades.
+    """
+    now = timezone.now()
+    candidate_pks = list(
+        PendingOrder.objects.filter(status='pending').values_list('pk', flat=True)
+    )
+    placed = 0
+    for pk in candidate_pks:
+        with transaction.atomic():
+            order = (
+                PendingOrder.objects.select_for_update()
+                .select_related('instrument')
+                .filter(pk=pk, status='pending')
+                .first()
+            )
+            if order is None:
+                continue
+            if not _trigger_ready(order, now):
+                continue
+            try:
+                trade = open_trade(
+                    order.user,
+                    order.instrument.symbol,
+                    order.direction,
+                    order.stake,
+                    duration_seconds=order.expiry_seconds,
+                )
+            except TradeError as exc:
+                order.status = 'failed'
+                order.note = str(exc)[:200]
+                order.save(update_fields=['status', 'note'])
+                continue
+            order.status = 'placed'
+            order.trade = trade
+            order.placed_at = timezone.now()
+            order.save(update_fields=['status', 'trade', 'placed_at'])
+            placed += 1
+    return placed

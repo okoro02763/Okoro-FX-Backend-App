@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Trade, Wallet
+from .models import PendingOrder, Trade, Wallet
 
 
 @admin.register(Wallet)
@@ -26,4 +26,23 @@ class TradeAdmin(admin.ModelAdmin):
     list_filter = ('status', 'direction', 'instrument__category')
     search_fields = ('user__username', 'user__email', 'instrument__symbol')
     readonly_fields = ('profit', 'gross_payout', 'open_price', 'close_price')
+    ordering = ('-created_at',)
+
+
+@admin.register(PendingOrder)
+class PendingOrderAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'user',
+        'instrument',
+        'direction',
+        'stake',
+        'expiry_seconds',
+        'trigger_time',
+        'trigger_price',
+        'status',
+        'created_at',
+    )
+    list_filter = ('status', 'direction', 'instrument__category')
+    search_fields = ('user__username', 'user__email', 'instrument__symbol')
     ordering = ('-created_at',)

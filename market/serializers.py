@@ -15,6 +15,8 @@ class InstrumentSerializer(serializers.ModelSerializer):
             'category',
             'category_display',
             'payout_percent',
+            'payout_percent_short',
+            'payout_percent_long',
             'is_active',
             'sort_order',
         ]
@@ -35,4 +37,6 @@ class QuoteSerializer(serializers.Serializer):
     timestamp = serializers.IntegerField()
     source = serializers.CharField(required=False, default='simulated')
     payout_percent = serializers.FloatField(required=False, default=0)
+    payout_percent_short = serializers.FloatField(required=False, default=0)
+    payout_percent_long = serializers.FloatField(required=False, default=0)
     category = serializers.CharField(required=False, default='')

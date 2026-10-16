@@ -1,7 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Trade, Wallet
+from .models import PendingOrder, Trade, Wallet
 
 
 class TradeSerializer(serializers.ModelSerializer):
@@ -54,3 +54,31 @@ class WalletSerializer(serializers.ModelSerializer):
     class Meta:
         model = Wallet
         fields = ['demo_balance', 'updated_at']
+
+
+class PendingOrderSerializer(serializers.ModelSerializer):
+    symbol = serializers.CharField(source='instrument.symbol', read_only=True)
+    instrument_name = serializers.CharField(source='instrument.name', read_only=True)
+    direction_display = serializers.CharField(source='get_direction_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    trade_id = serializers.IntegerField(source='trade.id', read_only=True, default=None)
+
+    class Meta:
+        model = PendingOrder
+        fields = [
+            'id',
+            'symbol',
+            'instrument_name',
+            'direction',
+            'direction_display',
+            'stake',
+            'expiry_seconds',
+            'trigger_time',
+            'trigger_price',
+            'status',
+            'status_display',
+            'trade_id',
+            'note',
+            'created_at',
+            'placed_at',
+        ]

@@ -24,6 +24,15 @@ class Instrument(models.Model):
     payout_percent = models.DecimalField(
         max_digits=5, decimal_places=2, default=Decimal('80.00')
     )
+    # Payout offered for a short expiry (1+ minute) and a longer one (5+ min).
+    # The terminal resolves the applicable value from the chosen expiry; a
+    # Celery beat task drifts both within a configurable band every few minutes.
+    payout_percent_short = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('80.00')
+    )
+    payout_percent_long = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('85.00')
+    )
     # Anchor price used by the simulated feed and as a fallback when the
     # upstream provider is unavailable.
     base_price = models.DecimalField(
@@ -42,3 +51,12 @@ class Instrument(models.Model):
 
     def __str__(self):
         return f"{self.symbol} ({self.get_category_display()})"
+
+    # Expiries of 5 minutes or more use the long-term payout column.
+    LONG_EXPIRY_THRESHOLD_SECONDS = 300
+
+    def payout_for_duration(self, seconds):
+        """Payout percent that applies to a trade of ``seconds`` duration."""
+        if seconds is not None and seconds >= self.LONG_EXPIRY_THRESHOLD_SECONDS:
+            return self.payout_percent_long
+        return self.payout_percent_short

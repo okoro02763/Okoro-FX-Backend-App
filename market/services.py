@@ -69,6 +69,8 @@ def get_quote(symbol: str) -> Optional[Dict[str, Any]]:
 
     quote.setdefault('name', instrument.name)
     quote['payout_percent'] = float(instrument.payout_percent)
+    quote['payout_percent_short'] = float(instrument.payout_percent_short)
+    quote['payout_percent_long'] = float(instrument.payout_percent_long)
     quote['category'] = instrument.category
     cache.set(cache_key, quote, ttl)
     return quote

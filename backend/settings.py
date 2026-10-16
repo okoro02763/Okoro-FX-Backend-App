@@ -360,7 +360,20 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'trading.settle_expired_trades',
         'schedule': float(os.getenv('CELERY_SETTLE_INTERVAL', '5')),
     },
+    'process-pending-orders': {
+        'task': 'trading.process_pending_orders',
+        'schedule': float(os.getenv('CELERY_PENDING_INTERVAL', '5')),
+    },
+    'drift-payouts': {
+        'task': 'market.drift_payouts',
+        'schedule': float(os.getenv('CELERY_PAYOUT_DRIFT_INTERVAL', '180')),
+    },
 }
+
+# Payout drift band applied by market.drift_payouts (percent).
+PAYOUT_DRIFT_MIN = Decimal(os.getenv('PAYOUT_DRIFT_MIN', '60'))
+PAYOUT_DRIFT_MAX = Decimal(os.getenv('PAYOUT_DRIFT_MAX', '95'))
+PAYOUT_DRIFT_STEP = Decimal(os.getenv('PAYOUT_DRIFT_STEP', '2'))
 
 # ===========================
 # Channels / WebSockets

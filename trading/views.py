@@ -15,12 +15,19 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import Trade
-from .serializers import TradeSerializer, WalletSerializer
+from .models import PendingOrder, Trade
+from .serializers import (
+    PendingOrderSerializer,
+    TradeSerializer,
+    WalletSerializer,
+)
 from .services import (
     TradeError,
+    cancel_pending_order,
+    create_pending_order,
     get_wallet,
     open_trade,
+    process_pending_orders,
     reset_wallet,
     settle_expired_trades,
     settle_trade,
@@ -79,6 +86,7 @@ def trades(request):
 
     # Lazy settlement: keep state correct without depending on a worker.
     settle_expired_trades()
+    process_pending_orders()
 
     qs = Trade.objects.filter(user=request.user).select_related('instrument')
     status_filter = (request.query_params.get('status') or '').strip().lower()
@@ -142,6 +150,64 @@ def get_wallet_view(request):
     """The caller's demo wallet (created on first access)."""
     wallet = get_wallet(request.user)
     return Response(WalletSerializer(wallet).data)
+
+
+@api_view(['GET', 'POST'])
+def pending_orders(request):
+    """List the caller's pending orders, or schedule a new one.
+
+    POST ``/api/trading/pending/`` with either
+    ``{symbol, direction, stake, expiry_seconds?, trigger_time}`` or
+    ``{symbol, direction, stake, expiry_seconds?, trigger_price}``.
+    """
+    if request.method == 'POST':
+        data = request.data or {}
+        try:
+            order = create_pending_order(
+                request.user,
+                symbol=data.get('symbol'),
+                direction=data.get('direction'),
+                stake=data.get('stake'),
+                expiry_seconds=data.get('expiry_seconds'),
+                trigger_time=_parse_expiry(data.get('trigger_time')),
+                trigger_price=data.get('trigger_price'),
+            )
+        except TradeError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {'order': PendingOrderSerializer(order).data},
+            status=status.HTTP_201_CREATED,
+        )
+
+    # Fire anything that is already due, then return the current list.
+    process_pending_orders()
+    qs = PendingOrder.objects.filter(user=request.user).select_related(
+        'instrument', 'trade'
+    )
+    status_filter = (request.query_params.get('status') or '').strip().lower()
+    if status_filter in ('pending', 'placed', 'cancelled', 'failed'):
+        qs = qs.filter(status=status_filter)
+    return Response(
+        {
+            'count': qs.count(),
+            'results': PendingOrderSerializer(qs[:MAX_LIST_LIMIT], many=True).data,
+        }
+    )
+
+
+@api_view(['POST'])
+def cancel_pending_view(request):
+    """Cancel one of the caller's pending orders."""
+    order_id = (request.data or {}).get('order_id') or request.query_params.get('order_id')
+    if not order_id:
+        return Response(
+            {'detail': 'order_id is required.'}, status=status.HTTP_400_BAD_REQUEST
+        )
+    try:
+        order = cancel_pending_order(request.user, order_id)
+    except TradeError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({'order': PendingOrderSerializer(order).data})
 
 
 @api_view(['POST'])
