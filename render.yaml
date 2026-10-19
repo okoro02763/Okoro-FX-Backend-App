@@ -1,0 +1,40 @@
+# Render blueprint for the OKORO FX backend.
+#
+# Migrations run as a *pre-deploy* command, not in the build: the build step
+# has no database access, and running them before the new release starts means
+# the schema is ready before any request is served. (If you configure the
+# service by hand in the dashboard instead of using this file, set the same
+# commands in Settings -> Build & Deploy.)
+#
+# The health check path makes Render hold traffic back from a release whose
+# schema is behind, instead of routing users into 500s.
+services:
+  - type: web
+    name: okoro-fx-backend-app
+    runtime: python
+    plan: free
+    healthCheckPath: /api/health
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: python manage.py migrate --noinput
+    startCommand: daphne -b 0.0.0.0 -p $PORT backend.asgi:application
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        sync: false
+      - key: DJANGO_ALLOWED_HOSTS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false
+      - key: KYC_ENCRYPTION_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false

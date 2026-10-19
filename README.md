@@ -223,3 +223,35 @@ configured (use a test address — it sends for real when Termii/SMTP is set).
 
 `verify_email` is registered and ready but intentionally **not** wired: the app
 has no email-verification mechanism yet. Do not invent a trigger for it.
+
+## Deployment (Render)
+
+The service is defined by `render.yaml`. Two things matter:
+
+1. **Migrations run automatically.** `preDeployCommand: python manage.py migrate
+   --noinput` runs before each release starts, so a new model can never be
+   served against an old schema. (`railway.toml` and `docker-compose.yml` run
+   the same command; the `Dockerfile` runs it in its `CMD`.) If you configure
+   the service by hand instead of from `render.yaml`, set the **Pre-Deploy
+   Command** to `python manage.py migrate --noinput` under *Settings → Build &
+   Deploy*.
+2. **Health checks catch a bad deploy.** `healthCheckPath: /api/health` — the
+   endpoint returns `200` only when the database is reachable *and* there are no
+   unapplied migrations, otherwise `503` with the pending migration names. A
+   schema-behind release is then held back instead of routing users into 500s.
+
+Set `DEBUG=False` (the default) in production. The trading views are also
+hardened so the lazy settlement/trigger sweeps can never take down a read:
+failures are logged via `logger.exception` and the caller still gets their
+trades. All logs go to **stdout** (Render captures it) at `DJANGO_LOG_LEVEL`
+(default `INFO`); 500s log a plain traceback, never the HTML debug page.
+
+### Health endpoint
+
+```bash
+curl -s https://<service>/api/health
+# {"status":"ok","database":"ok","migrations":"ok","unapplied_migrations":[]}
+```
+
+It is public and returns only booleans plus any pending migration names — never
+configuration or secrets.

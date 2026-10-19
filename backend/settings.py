@@ -237,6 +237,50 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     X_FRAME_OPTIONS = 'DENY'
 
+# ===========================
+# Logging
+# ===========================
+# Everything goes to stdout so the platform (Render/Docker) captures it; the
+# previous default sent WARNING+ to stderr and dropped INFO entirely, so
+# logger.exception() tracebacks from the trading views were easy to miss.
+# Verbosity is controlled by DJANGO_LOG_LEVEL (default INFO).
+LOG_LEVEL = os.getenv('DJANGO_LOG_LEVEL', 'INFO').upper()
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{asctime} {levelname} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': LOG_LEVEL,
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': LOG_LEVEL,
+            'propagate': False,
+        },
+        # Django's own request-error logger; DEBUG=False here so a 500 logs a
+        # plain traceback to stdout instead of the HTML debug page.
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+    },
+}
+
 ROOT_URLCONF = 'backend.urls'
 
 TEMPLATES = [

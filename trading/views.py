@@ -7,6 +7,7 @@ on open, idempotent settlement, wallet credited exactly once) are enforced in
 one place.
 """
 
+import logging
 from datetime import datetime
 from datetime import timezone as dt_timezone
 
@@ -35,6 +36,24 @@ from .services import (
 
 MAX_LIST_LIMIT = 200
 DEFAULT_LIST_LIMIT = 50
+
+logger = logging.getLogger(__name__)
+
+
+def _run_lazy_jobs(*jobs):
+    """Run in-request housekeeping without ever failing the request.
+
+    Settlement and pending-order triggering are best-effort: they make the
+    demo self-healing without a Celery worker, but a trade list must still be
+    returned even if one of them fails (a missing table, a dead quote feed, a
+    locked row). Each job is isolated so one failure never skips the others,
+    and the traceback is logged for ops instead of surfacing as a 500.
+    """
+    for job in jobs:
+        try:
+            job()
+        except Exception:  # noqa: BLE001 - deliberate last-resort guard
+            logger.exception('Lazy trading job %s failed', getattr(job, '__name__', job))
 
 
 def _parse_expiry(raw):
@@ -85,8 +104,8 @@ def trades(request):
         )
 
     # Lazy settlement: keep state correct without depending on a worker.
-    settle_expired_trades()
-    process_pending_orders()
+    # Best-effort only -- a failure here must never hide the caller's trades.
+    _run_lazy_jobs(settle_expired_trades, process_pending_orders)
 
     qs = Trade.objects.filter(user=request.user).select_related('instrument')
     status_filter = (request.query_params.get('status') or '').strip().lower()
@@ -141,7 +160,14 @@ def settle_view(request):
         trade = settle_trade(trade.pk)
         return Response({'trade': TradeSerializer(trade).data, 'wallet': WalletSerializer(get_wallet(request.user)).data})
 
-    count = settle_expired_trades()
+    try:
+        count = settle_expired_trades()
+    except Exception:  # noqa: BLE001 - ops-facing helper, never a 500
+        logger.exception('Forced settlement sweep failed')
+        return Response(
+            {'detail': 'Settlement is temporarily unavailable.'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
     return Response({'settled': count})
 
 
@@ -179,8 +205,10 @@ def pending_orders(request):
             status=status.HTTP_201_CREATED,
         )
 
-    # Fire anything that is already due, then return the current list.
-    process_pending_orders()
+    # Fire anything that is already due, then return the current list. The
+    # trigger sweep is best-effort: an unapplied migration (missing table)
+    # must not stop the caller from reading their own orders.
+    _run_lazy_jobs(process_pending_orders)
     qs = PendingOrder.objects.filter(user=request.user).select_related(
         'instrument', 'trade'
     )

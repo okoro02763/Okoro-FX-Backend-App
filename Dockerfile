@@ -20,4 +20,8 @@ COPY . .
 EXPOSE 8000
 
 # daphne serves HTTP *and* WebSockets (backend.asgi:application).
-CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "backend.asgi:application"]
+#
+# migrate runs first on every container start so a deploy can never serve
+# requests against a stale schema (the "relation ... does not exist" 500s).
+# --noinput keeps it non-interactive; it is a no-op when everything is applied.
+CMD ["sh", "-c", "python manage.py migrate --noinput && exec daphne -b 0.0.0.0 -p 8000 backend.asgi:application"]
