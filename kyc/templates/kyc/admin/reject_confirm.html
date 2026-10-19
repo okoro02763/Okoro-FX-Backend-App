@@ -1,0 +1,30 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div id="content-main">
+  <h1>Reject KYC profile</h1>
+
+  <p>
+    Rejecting the verification for
+    <strong>{{ profile.user.email }}</strong>
+    {% if profile.full_name %}({{ profile.full_name }}){% endif %}.
+    The user will receive an email with the reason below and can resubmit.
+  </p>
+
+  <form method="post">{% csrf_token %}
+    <fieldset class="module aligned">
+      <div class="form-row">
+        <label for="id_reason">Reason (shown to the user):</label>
+        <textarea name="reason" id="id_reason" rows="4" cols="60"
+          placeholder="e.g. The ID photo is blurry and the document number is not readable.">{{ profile.rejection_reason }}</textarea>
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" name="confirm" value="Confirm rejection" class="default">
+      <input type="submit" name="cancel" value="Cancel" class="cancel">
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -16,6 +16,7 @@ from .authentication import BearerTokenAuthentication
 from .models import CurrencyPair, PriceData, Trade, DerivAccount, Profile
 from .permissions import IsAdminUser
 from .deriv_client import deriv_client
+from kyc.services import user_is_verified as kyc_user_is_verified
 import talib
 import numpy as np
 import logging
@@ -137,9 +138,7 @@ def place_trade(request):
         if profile is None:
             profile = Profile.objects.get_or_create(user=request.user)[0]
 
-        if profile.account_type == 'live' and not request.user.identity_verifications.filter(
-            status='approved'
-        ).exists():
+        if profile.account_type == 'live' and not kyc_user_is_verified(request.user):
             return Response(
                 {
                     'error': 'Live trading requires an approved identity verification. Complete KYC first.',

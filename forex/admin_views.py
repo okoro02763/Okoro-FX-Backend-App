@@ -418,4 +418,6 @@ def review_withdrawal(request, withdrawal_id):
 
 # Local (non-API) helper reused elsewhere.
 def user_has_approved_kyc(user):
-    return user.identity_verifications.filter(status='approved').exists()
+    from kyc.services import user_is_verified
+
+    return user_is_verified(user)

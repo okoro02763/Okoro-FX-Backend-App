@@ -14,7 +14,7 @@ from django.conf import settings
 from django.core.cache import cache
 
 from .models import Instrument
-from .providers import INTERVAL_SECONDS, SimulatedProvider, TwelveDataProvider, get_provider
+from .providers import INTERVAL_SECONDS, SimulatedProvider, get_provider
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +57,17 @@ def get_quote(symbol: str) -> Optional[Dict[str, Any]]:
     if cached:
         return cached
 
-    provider = get_provider()
-    if isinstance(provider, TwelveDataProvider):
+    provider = get_provider(symbol)
+    if getattr(provider, 'is_upstream', False):
         try:
             quote = provider.quote(symbol)
         except Exception as exc:  # rate limits, offline, bad symbol ...
-            logger.warning('Twelve Data quote failed for %s (%s); using simulated feed', symbol, exc)
+            logger.warning(
+                '%s quote failed for %s (%s); using simulated feed',
+                provider.name,
+                symbol,
+                exc,
+            )
             quote = _simulated_quote(instrument)
     else:
         quote = _simulated_quote(instrument)
@@ -94,13 +99,19 @@ def get_candles(
     if cached is not None:
         return cached
 
-    provider = get_provider()
+    provider = get_provider(symbol)
     candles: Optional[List[Dict[str, Any]]] = None
-    if isinstance(provider, TwelveDataProvider):
+    if getattr(provider, 'is_upstream', False):
         try:
             candles = provider.candles(symbol, interval, outputsize, end_time=end_time)
         except Exception as exc:
-            logger.warning('Twelve Data candles failed for %s (%s); using simulated feed', symbol, exc)
+            logger.warning(
+                '%s candles failed for %s/%s (%s); using simulated feed',
+                provider.name,
+                symbol,
+                interval,
+                exc,
+            )
 
     if not candles:
         candles = _simulated_candles(instrument, interval, outputsize, end_time=end_time)

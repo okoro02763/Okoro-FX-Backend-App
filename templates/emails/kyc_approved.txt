@@ -1,0 +1,11 @@
+Your identity is verified
+
+Hi {{ name }},
+
+Good news -- your identity has been verified. You can now:
+
+  • Switch to the live (real-money) account
+  • Fund your wallet
+  • Withdraw your funds
+{% if action_url %}Go to your account: {{ action_url }}
+{% endif %}— The OKORO FX team • Trade Global. Trade Smarter.

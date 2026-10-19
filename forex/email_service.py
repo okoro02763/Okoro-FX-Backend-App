@@ -82,6 +82,16 @@ EMAILS = {
         'You are invited to OKORO FX',
         'admin_invite.html', 'admin_invite.txt',
     ),
+    'kyc_received': EmailSpec(
+        'We received your documents', 'kyc_received.html', 'kyc_received.txt',
+    ),
+    'kyc_approved': EmailSpec(
+        'Your identity is verified', 'kyc_approved.html', 'kyc_approved.txt',
+    ),
+    'kyc_rejected': EmailSpec(
+        'Action needed on your verification',
+        'kyc_rejected.html', 'kyc_rejected.txt',
+    ),
 }
 
 

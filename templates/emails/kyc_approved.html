@@ -1,0 +1,22 @@
+{% extends "emails/base.html" %}
+{% block preheader %}Your identity has been verified. Live trading is now unlocked.{% endblock %}
+{% block heading %}Your identity is verified{% endblock %}
+{% block content %}
+  <div style="font-size:15px;line-height:1.7;color:#C6D6E8;">Hi {{ name }},</div>
+  <div style="font-size:15px;line-height:1.7;color:#2DD4BF;font-weight:bold;margin-top:10px;">
+    Good news -- your identity has been verified.
+  </div>
+  <div style="font-size:15px;line-height:1.7;color:#C6D6E8;margin-top:10px;">
+    You can now switch to the live (real-money) account, fund your wallet and
+    withdraw your funds.
+  </div>
+  {% if action_url %}
+  <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:16px;">
+    <tr>
+      <td style="background-color:#E8B454;border-radius:8px;">
+        <a href="{{ action_url }}" style="display:inline-block;padding:12px 22px;font-size:14px;font-weight:bold;color:#0D0F1A;text-decoration:none;">Go to your account</a>
+      </td>
+    </tr>
+  </table>
+  {% endif %}
+{% endblock %}

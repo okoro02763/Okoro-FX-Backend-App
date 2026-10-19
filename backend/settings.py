@@ -132,6 +132,7 @@ INSTALLED_APPS = [
     'forex',
     'market',
     'trading',
+    'kyc',
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
@@ -318,6 +319,20 @@ STATIC_URL = 'static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
+# ===========================
+# KYC (identity verification)
+# ===========================
+# Document files are stored OUTSIDE MEDIA_ROOT so they are never served by
+# the static/media handlers; access is via short-lived signed URLs only.
+KYC_PRIVATE_ROOT = os.getenv('KYC_PRIVATE_ROOT', os.path.join(BASE_DIR, 'private_media'))
+# Fernet key for encrypting document numbers at rest. Generate with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Mandatory in production (see kyc.crypto); derived from SECRET_KEY in DEBUG.
+KYC_ENCRYPTION_KEY = os.getenv('KYC_ENCRYPTION_KEY', '').strip()
+# Review backend: 'manual' (staff review in the admin -- the default).
+# A future automated provider (e.g. Smile Identity) plugs in here.
+KYC_PROVIDER = os.getenv('KYC_PROVIDER', 'manual').strip().lower()
+
 # Paystack (Nigeria payment gateway)
 PAYSTACK_PUBLIC_KEY = os.getenv('PAYSTACK_PUBLIC_KEY', '')
 PAYSTACK_SECRET_KEY = os.getenv('PAYSTACK_SECRET_KEY', '')
@@ -404,6 +419,18 @@ TWELVE_DATA_API_KEY = os.getenv('TWELVE_DATA_API_KEY', '').strip()
 TWELVE_DATA_BASE_URL = os.getenv(
     'TWELVE_DATA_BASE_URL', 'https://api.twelvedata.com'
 ).rstrip('/')
+# CoinGecko quotes the crypto universe in one batched request, so it carries the
+# high-frequency tick traffic while Twelve Data's small free-tier budget stays
+# available for forex, commodities and stocks. Optional: without the key crypto
+# is served by Twelve Data too (or the simulated feed when that is absent).
+COINGECKO_API_KEY = os.getenv('COINGECKO_API_KEY', '').strip()
+COINGECKO_BASE_URL = os.getenv(
+    'COINGECKO_BASE_URL', 'https://api.coingecko.com/api/v3'
+).rstrip('/')
+# Free-tier guards: max upstream requests per minute before the provider serves
+# its last known good payload instead (see market/providers.py).
+TWELVE_DATA_REQUESTS_PER_MINUTE = int(os.getenv('TWELVE_DATA_REQUESTS_PER_MINUTE', '8'))
+COINGECKO_REQUESTS_PER_MINUTE = int(os.getenv('COINGECKO_REQUESTS_PER_MINUTE', '30'))
 # Seconds a quote is cached to avoid burning the free-tier credit budget.
 MARKET_QUOTE_TTL = int(os.getenv('MARKET_QUOTE_TTL', '3'))
 # Price-stream tick cadence (WebSocket) and how often each stream also sweeps

@@ -119,6 +119,21 @@ See `backend/.env.example` for the full list. Email-relevant variables:
 
 Never commit real credentials. Copy `.env.example` to `.env` (git-ignored).
 
+Market-data variables (see `market/providers.py`):
+
+| Variable | Purpose |
+| --- | --- |
+| `TWELVE_DATA_API_KEY` | Real forex/commodity/stock quotes + candles (free tier ≈ 8 credits/min). |
+| `TWELVE_DATA_BASE_URL` | Twelve Data base URL. Default `https://api.twelvedata.com`. |
+| `COINGECKO_API_KEY` | Real crypto quotes/candles (one batched request per tick). |
+| `COINGECKO_BASE_URL` | CoinGecko base. Default `https://api.coingecko.com/api/v3` (Pro: `.../pro-api.coingecko.com/api/v3`). |
+| `TWELVE_DATA_REQUESTS_PER_MINUTE` | Request guard; beyond it the last known good quote is served. Default `8`. |
+| `COINGECKO_REQUESTS_PER_MINUTE` | Request guard for CoinGecko. Default `30`. |
+| `MARKET_QUOTE_TTL` | Seconds a quote is cached. Default `3`. |
+
+Without a key the market app serves a deterministic simulated feed, so the
+backend runs offline.
+
 ## Termii configuration
 
 Termii's email API is **template-based** — it does **not** accept arbitrary

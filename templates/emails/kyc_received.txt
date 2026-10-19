@@ -1,0 +1,12 @@
+We received your documents
+
+Hi {{ name }},
+
+We have received the identity documents you submitted for verification.
+
+  Document type: {{ doc_type }}
+
+Our review team usually responds within 24 hours. You will get another
+email as soon as your documents have been reviewed.
+{% if action_url %}Check your status: {{ action_url }}
+{% endif %}— The OKORO FX team • Trade Global. Trade Smarter.

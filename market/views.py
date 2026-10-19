@@ -6,6 +6,7 @@ from rest_framework.response import Response
 
 from . import services
 from .models import Instrument
+from .providers import reset_budgets
 from .serializers import InstrumentSerializer
 
 MAX_QUOTES_PER_REQUEST = 25
@@ -109,4 +110,5 @@ def candles(request):
 def refresh_cache(request):
     """Debug/dev helper: drop cached market data."""
     cache.clear()
+    reset_budgets()
     return Response({'status': 'ok'})

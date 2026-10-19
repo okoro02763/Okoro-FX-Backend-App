@@ -20,6 +20,7 @@ urlpatterns = [
     path('api/', include('forex.urls')),
     path('api/market/', include('market.urls')),
     path('api/trading/', include('trading.urls')),
+    path('api/kyc/', include('kyc.urls')),
 ]
 
 if settings.DEBUG:

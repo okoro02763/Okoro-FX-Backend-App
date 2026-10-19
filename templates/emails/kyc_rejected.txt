@@ -1,0 +1,11 @@
+Action needed on your verification
+
+Hi {{ name }},
+
+We could not accept the identity documents you submitted:
+
+  {{ reason }}
+
+You can submit new documents and try again.
+{% if action_url %}Resubmit your documents: {{ action_url }}
+{% endif %}— The OKORO FX team • Trade Global. Trade Smarter.

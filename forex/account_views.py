@@ -22,6 +22,10 @@ from .authentication import BearerTokenAuthentication
 from .permissions import IsAdminUser
 from .models import AuditLog, IdentityVerification, Payment, Profile, Withdrawal
 
+from kyc.permissions import IsKYCVerified
+from kyc.services import current_status as kyc_current_status
+from kyc.services import user_is_verified as kyc_user_is_verified
+
 User = get_user_model()
 
 logger = logging.getLogger(__name__)
@@ -57,15 +61,15 @@ def _kyc_serialize(v):
 def _account_status(user):
     profile = _with_profile(user)
     kyc = list(user.identity_verifications.all())
-    approved = any(k.status == 'approved' for k in kyc)
+    approved = kyc_user_is_verified(user)
     pending = any(k.status == 'pending' for k in kyc)
-    latest = kyc[0] if kyc else None
     return {
         'accountType': profile.account_type,
         'availableBalance': float(profile.available_balance),
         'liveVerified': approved,
         'kycPending': pending,
-        'kycStatus': latest.status if latest else 'none',
+        # Unified status across the legacy document flow and the new kyc app.
+        'kycStatus': kyc_current_status(user),
         'kyc': [_kyc_serialize(k) for k in kyc],
         'fees': {
             'fundingPercent': settings.FUNDING_FEE_PERCENT,
@@ -146,7 +150,8 @@ def set_account_type(request):
 
 
 def user_has_approved_kyc(user):
-    return user.identity_verifications.filter(status='approved').exists()
+    """Unified: new kyc app ('verified') or legacy approved document."""
+    return kyc_user_is_verified(user)
 
 
 @api_view(['POST'])
@@ -194,15 +199,11 @@ def submit_kyc(request):
 
 @api_view(['POST'])
 @authentication_classes([BearerTokenAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsKYCVerified])
 def live_fund(request):
     """Initialize a live-account funding payment via Paystack.
-    Body: { amount } in naira (NGN)."""
-    if not user_has_approved_kyc(request.user):
-        return Response(
-            {'message': 'Identity verification is required to fund a live account.'},
-            status=status.HTTP_403_FORBIDDEN,
-        )
+    Body: { amount } in naira (NGN). Identity verification is required
+    (enforced by IsKYCVerified)."""
 
     secret = settings.PAYSTACK_SECRET_KEY
     if not secret:
@@ -447,10 +448,11 @@ def list_withdrawals(request):
 
 @api_view(['POST'])
 @authentication_classes([BearerTokenAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsKYCVerified])
 def create_withdrawal(request):
     """Request a withdrawal. The percentage service charge is deducted from
     the requested amount; the user must have enough in their wallet.
+    Identity verification is required (enforced by IsKYCVerified).
     Body: { amount, bankName, accountNumber, accountName }"""
     amount = parse_amount(request.data.get('amount'))
     if amount is None:
