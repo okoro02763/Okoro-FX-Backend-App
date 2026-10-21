@@ -8,7 +8,6 @@ import logging
 
 from django.conf import settings
 from django.core import signing
-from django.db import DatabaseError
 from django.http import FileResponse, Http404
 from django.utils import timezone
 from rest_framework import status
@@ -27,6 +26,7 @@ from forex.authentication import BearerTokenAuthentication
 from .crypto import encrypt_value
 from .models import KYCProfile
 from .services import (
+    KYCStorageUnavailable,
     approve_profile,
     can_submit,
     get_or_create_profile,
@@ -40,10 +40,15 @@ logger = logging.getLogger('kyc')
 
 
 def _server_error_response():
-    """Return a friendly 500 without leaking internals."""
+    """Return a friendly, *retryable* error without leaking internals.
+
+    503 rather than 500: the database being unavailable is a transient outage
+    the client should retry, and the frontend's retry logic keys off ``code``,
+    not the status line. 500 told the UI "this is broken permanently".
+    """
     return Response(
         {'detail': 'Something went wrong, please try again', 'code': 'server_error'},
-        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
     )
 
 VALID_DOC_TYPES = {
@@ -72,7 +77,7 @@ def kyc_status(request):
     try:
         profile = get_or_create_profile(request.user)
         return Response(serialize_profile(profile))
-    except DatabaseError:
+    except KYCStorageUnavailable:
         logger.exception('KYC status failed for user %s', getattr(request.user, 'pk', None))
         return _server_error_response()
     except Exception:  # noqa: BLE001
@@ -128,7 +133,7 @@ def save_details(request):
         profile.postal_code = postal_code[:20]
         profile.save()
         return Response(serialize_profile(profile))
-    except DatabaseError:
+    except KYCStorageUnavailable:
         logger.exception('Save KYC details failed for user %s', getattr(request.user, 'pk', None))
         return _server_error_response()
     except Exception:  # noqa: BLE001
@@ -145,6 +150,17 @@ def upload_document(request):
     Multipart form: kind, file, optional doc_type + doc_number.
     Validates the file by content, not extension, and caps it at 5 MB.
     """
+    try:
+        return _upload_document(request)
+    except KYCStorageUnavailable:
+        logger.exception('KYC upload failed for user %s', getattr(request.user, 'pk', None))
+        return _server_error_response()
+    except Exception:  # noqa: BLE001
+        logger.exception('KYC upload failed for user %s', getattr(request.user, 'pk', None))
+        return _server_error_response()
+
+
+def _upload_document(request):
     profile = get_or_create_profile(request.user)
     if profile.status == 'pending':
         return _err('Your documents are under review and cannot be changed.', status.HTTP_409_CONFLICT)
@@ -197,13 +213,22 @@ def upload_document(request):
 @permission_classes([IsAuthenticated])
 def delete_document(request, document_id):
     """Remove an uploaded document before submitting."""
-    profile = get_or_create_profile(request.user)
-    if profile.status in {'pending', 'verified'}:
-        return _err('This submission cannot be changed right now.', status.HTTP_409_CONFLICT)
-    deleted, _ = profile.documents.filter(id=document_id).delete()
-    if not deleted:
-        raise Http404
-    return Response(serialize_profile(profile))
+    try:
+        profile = get_or_create_profile(request.user)
+        if profile.status in {'pending', 'verified'}:
+            return _err('This submission cannot be changed right now.', status.HTTP_409_CONFLICT)
+        deleted, _ = profile.documents.filter(id=document_id).delete()
+        if not deleted:
+            raise Http404
+        return Response(serialize_profile(profile))
+    except KYCStorageUnavailable:
+        logger.exception('KYC delete failed for user %s', getattr(request.user, 'pk', None))
+        return _server_error_response()
+    except Http404:
+        raise
+    except Exception:  # noqa: BLE001
+        logger.exception('KYC delete failed for user %s', getattr(request.user, 'pk', None))
+        return _server_error_response()
 
 
 @api_view(['POST'])
@@ -211,6 +236,17 @@ def delete_document(request, document_id):
 @permission_classes([IsAuthenticated])
 def submit(request):
     """Validate everything is present, then move the profile to pending."""
+    try:
+        return _submit(request)
+    except KYCStorageUnavailable:
+        logger.exception('KYC submit failed for user %s', getattr(request.user, 'pk', None))
+        return _server_error_response()
+    except Exception:  # noqa: BLE001
+        logger.exception('KYC submit failed for user %s', getattr(request.user, 'pk', None))
+        return _server_error_response()
+
+
+def _submit(request):
     profile = get_or_create_profile(request.user)
 
     if profile.status == 'pending':

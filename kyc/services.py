@@ -22,18 +22,42 @@ RESUBMIT_LIMIT = 3
 RESUBMIT_WINDOW = timedelta(hours=24)
 
 
+class KYCStorageUnavailable(Exception):
+    """Raised when the KYC tables cannot be read (e.g. missing migration).
+
+    Distinct from a generic ``DatabaseError`` so callers can degrade to a
+    retryable response instead of a raw 500. See ``get_or_create_profile``.
+    """
+
+
 def get_or_create_profile(user) -> KYCProfile:
-    """Get or create a profile, never raising on missing table."""
+    """Get or create the user's profile, or raise ``KYCStorageUnavailable``.
+
+    The old version caught ``DatabaseError``, logged, and **re-raised**. That
+    looked defensive but produced HTTP 500 anyway: a ``DatabaseError`` leaves
+    the request's transaction marked "needs rollback", so even though the view
+    caught the exception and returned a friendly 503 body, Django forced the
+    response status to 500. The frontend then had no ``code`` to act on.
+
+    Wrapping the query in its own ``transaction.atomic()`` gives the failure a
+    savepoint to unwind, so the connection returns to a usable state and the
+    view's response -- status included -- actually reaches the client. The
+    original exception is logged in full and chained onto the new one, so the
+    production logs still show the real cause.
+    """
     try:
-        profile, _ = KYCProfile.objects.get_or_create(user=user)
+        with transaction.atomic():
+            profile, _ = KYCProfile.objects.get_or_create(user=user)
         return profile
-    except DatabaseError:
+    except DatabaseError as exc:
         logger.exception(
             'Could not get/create the KYC profile for user %s. '
             'Is the kyc migration applied on this database?',
             getattr(user, 'pk', None),
         )
-        raise
+        raise KYCStorageUnavailable(
+            'The KYC profile table is unavailable; has the kyc migration been applied?'
+        ) from exc
 
 
 def _load_profile(user):
