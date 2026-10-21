@@ -73,3 +73,41 @@ class HealthEndpointTest(TestCase):
         """No auth header/session -- the platform probes this unauthenticated."""
         self.client.logout()
         self.assertEqual(self.client.get('/api/health').status_code, 200)
+
+
+class UnappliedMigrationReportingTest(TestCase):
+    """The list of pending migrations must name real migrations.
+
+    ``MigrationExecutor.migration_plan()`` yields ``(migration, backwards)``
+    pairs. A previous version unpacked them as ``(app_label, name)``, so a
+    production health check reported the nonsense entry
+    ``"kyc.0001_initial.False"`` instead of ``"kyc.0001_initial"``.
+    """
+
+    def test_names_are_app_label_dot_migration_name(self):
+        from django.db import connection
+        from django.db.migrations.executor import MigrationExecutor
+
+        from backend.health import _unapplied_migrations
+
+        # Pretend every leaf migration still has to run.
+        executor = MigrationExecutor(connection)
+        leaves = [
+            executor.loader.graph.nodes[node]
+            for node in executor.loader.graph.leaf_nodes()
+        ]
+        with mock.patch.object(
+            MigrationExecutor,
+            'migration_plan',
+            return_value=[(migration, False) for migration in leaves],
+        ):
+            pending = _unapplied_migrations()
+
+        self.assertTrue(pending)
+        for entry in pending:
+            self.assertIsInstance(entry, str)
+            # Exactly one dot: "app_label.migration_name", never "...False".
+            self.assertEqual(entry.count('.'), 1, entry)
+            self.assertNotIn('True', entry)
+            self.assertNotIn('False', entry)
+        self.assertIn('kyc.0001_initial', pending)

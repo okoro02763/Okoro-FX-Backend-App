@@ -24,14 +24,23 @@ logger = logging.getLogger(__name__)
 
 
 def _unapplied_migrations():
-    """Return the ``[(app_label, migration_name), ...]`` still to be applied.
+    """Return the ``['app_label.migration_name', ...]`` still to be applied.
 
     Uses the same executor ``migrate`` does, so the answer matches reality
     (including migrations recorded in ``django_migrations``).
+
+    ``migration_plan()`` yields ``(migration, backwards)`` pairs -- a
+    ``Migration`` instance and a bool -- not ``(app_label, name)``. Unpacking
+    it as the latter produced the nonsense entry
+    ``"kyc.0001_initial.False"`` in a real incident; the app label and name
+    come from the ``Migration`` object itself.
     """
     executor = MigrationExecutor(connection)
     targets = executor.loader.graph.leaf_nodes()
-    return [(app, name) for app, name in executor.migration_plan(targets)]
+    return [
+        f'{migration.app_label}.{migration.name}'
+        for migration, _backwards in executor.migration_plan(targets)
+    ]
 
 
 @api_view(['GET'])
@@ -66,7 +75,7 @@ def health(request):
         payload.update(
             status='error',
             migrations='pending',
-            unapplied_migrations=[f'{app}.{name}' for app, name in pending],
+            unapplied_migrations=pending,
         )
         http_status = 503
 
