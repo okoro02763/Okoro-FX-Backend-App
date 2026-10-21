@@ -34,11 +34,18 @@ services:
     # the process exits and Render cancels the deploy instead of routing
     # traffic to an instance that would answer 500 on every API call.
     #
+    # gunicorn, not daphne: the live service already runs "gunicorn
+    # backend.wsgi" (Render's own Python fallback) and it starts cleanly, so
+    # the only thing this command adds is the migration. Switching servers in
+    # the same change that fixes a deploy outage would make it impossible to
+    # tell which edit broke things. daphne would only be needed for
+    # WebSockets/Channels, which nothing here uses.
+    #
     # The echo is deliberate: it makes "did migrations actually run?"
-    # answerable from the deploy log alone. "exec" then hands the process over
-    # to daphne so Render's SIGTERM on shutdown reaches the server instead of
+    # answerable from the deploy log alone. "exec" hands the process over to
+    # gunicorn so Render's SIGTERM on shutdown reaches the server instead of
     # the wrapping shell.
-    startCommand: sh -c "echo '==> Applying migrations' && python manage.py migrate --noinput && echo '==> Starting daphne' && exec daphne -b 0.0.0.0 -p $PORT backend.asgi:application"
+    startCommand: sh -c "echo '==> Applying migrations' && python manage.py migrate --noinput && echo '==> Starting gunicorn' && exec gunicorn backend.wsgi"
     envVars:
       - key: PYTHON_VERSION
         value: "3.12"
