@@ -229,6 +229,11 @@ CSRF_TRUSTED_ORIGINS = [
 # Hardening applied whenever DEBUG is off (i.e. any real deployment).
 if not DEBUG:
     SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'True').lower() == 'true'
+    # The health probe must always answer, even if the platform's probe
+    # arrives over plain HTTP without X-Forwarded-Proto: a 301 redirect
+    # would make the deploy platform mark a perfectly healthy service as
+    # unhealthy. The endpoint only ever reports booleans and migration names.
+    SECURE_REDIRECT_EXEMPT = [r'^api/health/?$']
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '31536000'))
