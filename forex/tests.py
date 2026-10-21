@@ -10,7 +10,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.authtoken.models import Token
 
-from .models import Payment, Profile, Withdrawal
+from .models import IdentityVerification, Payment, Profile, Withdrawal
 from .referral import ensure_referral_code
 
 User = get_user_model()
@@ -278,6 +278,16 @@ class WithdrawalTests(TestCase):
         self.profile = Profile.objects.create(
             user=self.user, available_balance=Decimal('5000.00')
         )
+        # Withdrawing is a live-account action: the endpoint is guarded by
+        # IsKYCVerified. Without this the request is rejected with 403
+        # before the amount is ever looked at, and these tests would be
+        # asserting the wrong thing.
+        IdentityVerification.objects.create(
+            user=self.user,
+            doc_type='nin',
+            doc_number='12345678901',
+            status='approved',
+        )
 
     def post(self, amount):
         return self.client.post(
@@ -320,6 +330,15 @@ class WithdrawalTests(TestCase):
         w = Withdrawal.objects.get()
         self.assertEqual(w.fee, Decimal('30.00'))
         self.assertEqual(w.net_amount, Decimal('1970.00'))
+
+    def test_unverified_user_cannot_withdraw(self):
+        """Money may not leave without identity verification."""
+        IdentityVerification.objects.filter(user=self.user).delete()
+        resp = self.post('2000')
+        self.assertEqual(resp.status_code, 403)
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.available_balance, Decimal('5000.00'))
+        self.assertEqual(Withdrawal.objects.count(), 0)
 
 
 class FeeTests(TestCase):

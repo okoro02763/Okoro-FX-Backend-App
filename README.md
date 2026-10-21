@@ -228,23 +228,55 @@ has no email-verification mechanism yet. Do not invent a trigger for it.
 
 The service is defined by `render.yaml`. Two things matter:
 
-1. **Migrations run automatically.** `preDeployCommand: python manage.py migrate
-   --noinput` runs before each release starts, so a new model can never be
-   served against an old schema. (`railway.toml` and `docker-compose.yml` run
-   the same command; the `Dockerfile` runs it in its `CMD`.) If you configure
-   the service by hand instead of from `render.yaml`, set the **Pre-Deploy
-   Command** to `python manage.py migrate --noinput` under *Settings → Build &
-   Deploy*.
+1. **Migrations run automatically.** Render only supports a *pre-deploy*
+   command on **paid** web services, private services and background workers.
+   On the free plan the pre-deploy command is silently ignored, so the
+   migration is applied from the **start command** instead:
+
+   ```
+   sh -c "python manage.py migrate --noinput && exec daphne -b 0.0.0.0 -p $PORT backend.asgi:application"
+   ```
+
+   Every plan runs that, and the `preDeployCommand` is kept as well so a paid
+   plan applies the migrations *before* the new instance starts serving. If
+   the migration fails the process exits and the deploy is cancelled, instead
+   of routing traffic to an instance that would answer 500 on every API call.
+   (`railway.toml` and `docker-compose.yml` run the same command; the
+   `Dockerfile` runs it in its `CMD`.)
+
+   If you configure the service by hand instead of from `render.yaml`, set the
+   **Start Command** to the line above under *Settings → Build & Deploy* —
+   the pre-deploy command alone is not enough on the free plan.
+
+   `build.sh` is the build step. It installs the dependencies and then fails
+   the build if any model change lacks a committed migration
+   (`python manage.py checkmigrations`), so a release whose schema is behind
+   the code cannot go out in the first place. That check never opens a
+   database connection — Django's own `makemigrations --check --dry-run`
+   connects first, and with an unreachable database (and psycopg2's default
+   lack of a connect timeout) the build would hang instead of failing
+   cleanly. Run `python manage.py makemigrations --check --dry-run` locally
+   for the same verdict with a database attached.
+
 2. **Health checks catch a bad deploy.** `healthCheckPath: /api/health` — the
    endpoint returns `200` only when the database is reachable *and* there are no
    unapplied migrations, otherwise `503` with the pending migration names. A
    schema-behind release is then held back instead of routing users into 500s.
 
+Every app in `INSTALLED_APPS` must have a `migrations/` package with an
+`__init__.py`. An app without one is skipped by `makemigrations` unless it is
+named explicitly (`python manage.py makemigrations kyc`), and its tables are
+never created — the exact cause of the `relation "kyc_kycprofile" does not
+exist` outage.
+
 Set `DEBUG=False` (the default) in production. The trading views are also
 hardened so the lazy settlement/trigger sweeps can never take down a read:
 failures are logged via `logger.exception` and the caller still gets their
-trades. All logs go to **stdout** (Render captures it) at `DJANGO_LOG_LEVEL`
-(default `INFO`); 500s log a plain traceback, never the HTML debug page.
+trades. The same applies to the KYC lookups behind `GET /api/account/`: a KYC
+table that cannot be read degrades the account payload to "not verified" and
+logs the error instead of returning a 500. All logs go to **stdout** (Render
+captures it) at `DJANGO_LOG_LEVEL` (default `INFO`); 500s log a plain
+traceback, never the HTML debug page.
 
 ### Health endpoint
 
