@@ -44,6 +44,16 @@ class TradesEndpointTest(TestCase):
         self.assertEqual(response.data['count'], 0)
 
     def test_trades_returns_200_with_an_open_pending_order(self):
+        """A pending order must not appear as a trade in the list.
+
+        The order's trigger is deliberately held *unreachable* (a 'buy' whose
+        price is far below any real quote) so ``process_pending_orders`` cannot
+        fire it during the request. The original version used a hardcoded
+        ``trigger_price`` of 1.00000000, which is close to the real EUR/USD
+        rate -- when the live/simulated quote happened to land at or below it
+        the order triggered, a trade was opened, and ``count`` became 1. That
+        made the test flaky and dependent on the market feed.
+        """
         instrument = Instrument.objects.create(
             symbol='EUR/USD', name='Euro / US Dollar', category='currencies'
         )
@@ -52,10 +62,12 @@ class TradesEndpointTest(TestCase):
             instrument=instrument,
             direction='buy',
             stake=Decimal('10.00'),
-            trigger_price=Decimal('1.00000000'),
+            # Unreachable buy trigger: the order stays pending for the request.
+            trigger_price=Decimal('0.00000001'),
             status='pending',
         )
-        response = self.client.get('/api/trading/trades/')
+        with mock.patch('market.services.get_quote', return_value=None):
+            response = self.client.get('/api/trading/trades/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['count'], 0)
 

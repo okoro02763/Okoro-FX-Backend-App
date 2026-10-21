@@ -30,21 +30,19 @@ services:
     buildCommand: bash build.sh
     # Honoured on paid plans only; harmless (idempotent) everywhere else.
     preDeployCommand: python manage.py migrate --noinput
-    # Every plan: apply the migrations, then serve. If the migration fails
-    # the process exits and Render cancels the deploy instead of routing
-    # traffic to an instance that would answer 500 on every API call.
+    # Every plan: apply the migrations, then serve.
+    #
+    # This is belt-and-braces. The real guarantee lives in backend/wsgi.py,
+    # which calls backend.startup.migrate_on_startup() -- that runs no matter
+    # what this file says, because the platform runs "gunicorn backend.wsgi"
+    # and gunicorn imports that exact module. A service created by hand in the
+    # dashboard ignores render.yaml entirely (which is precisely how the
+    # "kyc_kycprofile does not exist" outage happened), so nothing here may be
+    # the only path to a migrated schema.
     #
     # gunicorn, not daphne: the live service already runs "gunicorn
-    # backend.wsgi" (Render's own Python fallback) and it starts cleanly, so
-    # the only thing this command adds is the migration. Switching servers in
-    # the same change that fixes a deploy outage would make it impossible to
-    # tell which edit broke things. daphne would only be needed for
-    # WebSockets/Channels, which nothing here uses.
-    #
-    # The echo is deliberate: it makes "did migrations actually run?"
-    # answerable from the deploy log alone. "exec" hands the process over to
-    # gunicorn so Render's SIGTERM on shutdown reaches the server instead of
-    # the wrapping shell.
+    # backend.wsgi" and starts cleanly, so switching servers is a needless
+    # variable during an outage.
     startCommand: sh -c "echo '==> Applying migrations' && python manage.py migrate --noinput && echo '==> Starting gunicorn' && exec gunicorn backend.wsgi"
     envVars:
       - key: PYTHON_VERSION

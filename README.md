@@ -226,35 +226,61 @@ has no email-verification mechanism yet. Do not invent a trigger for it.
 
 ## Deployment (Render)
 
-The service is defined by `render.yaml`. Two things matter:
+The service is defined by `render.yaml`. Three things matter:
 
-1. **Migrations run automatically.** Render only supports a *pre-deploy*
-   command on **paid** web services, private services and background workers.
-   On the free plan the pre-deploy command is silently ignored, so the
-   migration is applied from the **start command** instead:
+0. **`backend/wsgi.py` applies migrations on every boot.** This is the only
+   mechanism that does not depend on how the service is configured.
+
+   `render.yaml` is honoured **only for a Blueprint-managed service**. A web
+   service created by hand in the Render dashboard ignores the file completely
+   and runs whatever is typed into *Settings → Build & Deploy* — including
+   Render's own fallback, `gunicorn backend.wsgi`. That is exactly how the
+   `relation "kyc_kycprofile" does not exist` outage happened: `render.yaml`
+   said `migrate`, the dashboard ran gunicorn, and the schema was never
+   created.
+
+   Because `gunicorn backend.wsgi` imports `backend/wsgi.py` by definition,
+   the call at the bottom of that module runs on every boot no matter what the
+   dashboard says:
+
+   ```python
+   from backend.startup import migrate_on_startup
+   migrate_on_startup()
+   ```
+
+   `backend/startup.py` inspects the migration plan, runs `migrate` only if
+   something is pending, logs loudly, and **never raises** — a process that
+   boots and reports its schema state via `/api/health` is far more useful than
+   one that crashes into a bare 502. Set `AUTO_MIGRATE=False` to disable it
+   where schema changes must be a deliberate, separate step.
+
+1. **Migrations also run in the start command.** Render only supports a
+   *pre-deploy* command on **paid** web services, private services and
+   background workers. On the free plan the pre-deploy command is silently
+   ignored, so the migration is applied from the **start command** as well:
 
    ```
-   sh -c "python manage.py migrate --noinput && exec daphne -b 0.0.0.0 -p $PORT backend.asgi:application"
+   sh -c "python manage.py migrate --noinput && exec gunicorn backend.wsgi"
    ```
 
-   Every plan runs that, and the `preDeployCommand` is kept as well so a paid
-   plan applies the migrations *before* the new instance starts serving. If
-   the migration fails the process exits and the deploy is cancelled, instead
-   of routing traffic to an instance that would answer 500 on every API call.
+   Every plan runs that, and the `preDeployCommand` is kept so a paid plan
+   applies the migrations *before* the new instance starts serving.
    (`railway.toml` and `docker-compose.yml` run the same command; the
    `Dockerfile` runs it in its `CMD`.)
 
    If you configure the service by hand instead of from `render.yaml`, set the
-   **Start Command** to the line above under *Settings → Build & Deploy* —
-   the pre-deploy command alone is not enough on the free plan.
+   **Build Command** to `bash build.sh` and the **Start Command** to the line
+   above under *Settings → Build & Deploy*. But note step 0: even without
+   this, the schema will now be migrated by the WSGI entry point.
 
-   `build.sh` is the build step. It installs the dependencies and then fails
-   the build if any model change lacks a committed migration
-   (`python manage.py checkmigrations`), so a release whose schema is behind
-   the code cannot go out in the first place. That check never opens a
-   database connection — Django's own `makemigrations --check --dry-run`
-   connects first, and with an unreachable database (and psycopg2's default
-   lack of a connect timeout) the build would hang instead of failing
+   `build.sh` is the build step. It installs the dependencies, collects
+   static files (`collectstatic`, so the browsable API does not 404 on its own
+   CSS/JS in production), and then fails the build if any model change lacks a
+   committed migration (`python manage.py checkmigrations`), so a release whose
+   schema is behind the code cannot go out in the first place. That check never
+   opens a database connection — Django's own `makemigrations --check
+   --dry-run` connects first, and with an unreachable database (and psycopg2's
+   default lack of a connect timeout) the build would hang instead of failing
    cleanly. Run `python manage.py makemigrations --check --dry-run` locally
    for the same verdict with a database attached.
 
