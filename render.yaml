@@ -1,10 +1,14 @@
 # Render blueprint for the OKORO FX backend.
 #
-# Migrations run as a *pre-deploy* command, not in the build: the build step
-# has no database access, and running them before the new release starts means
-# the schema is ready before any request is served. (If you configure the
-# service by hand in the dashboard instead of using this file, set the same
-# commands in Settings -> Build & Deploy.)
+# IMPORTANT -- how migrations actually get applied:
+#
+# Render only supports a *pre-deploy* command on **paid** web services. On the
+# free plan the pre-deploy command is silently ignored, so a blueprint that
+# relies on it alone ships a schema that is one release behind the code --
+# exactly the "relation \"kyc_kycprofile\" does not exist" outage this file
+# used to cause. The migration therefore runs in the *start* command, which
+# every plan honours, and the pre-deploy command is kept as well so a paid
+# plan applies the migrations before the new instance starts serving.
 #
 # The health check path makes Render hold traffic back from a release whose
 # schema is behind, instead of routing users into 500s.
@@ -14,9 +18,18 @@ services:
     runtime: python
     plan: free
     healthCheckPath: /api/health
-    buildCommand: pip install -r requirements.txt
+    # "bash build.sh" rather than "./build.sh": the executable bit is not
+    # preserved on every checkout, and a build that cannot start would fail
+    # the deploy before it even reaches the migrations.
+    buildCommand: bash build.sh
+    # Honoured on paid plans only; harmless (idempotent) everywhere else.
     preDeployCommand: python manage.py migrate --noinput
-    startCommand: daphne -b 0.0.0.0 -p $PORT backend.asgi:application
+    # Every plan: apply the migrations, then serve. If the migration fails
+    # the process exits and Render cancels the deploy instead of routing
+    # traffic to an instance that would answer 500 on every API call.
+    # "exec" hands the process over to daphne so Render's SIGTERM on
+    # shutdown reaches the server instead of the wrapping shell.
+    startCommand: sh -c "python manage.py migrate --noinput && exec daphne -b 0.0.0.0 -p $PORT backend.asgi:application"
     envVars:
       - key: PYTHON_VERSION
         value: "3.12"

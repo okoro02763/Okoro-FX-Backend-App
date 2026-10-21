@@ -7,7 +7,7 @@ import requests
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import (
@@ -29,6 +29,10 @@ from kyc.services import user_is_verified as kyc_user_is_verified
 User = get_user_model()
 
 logger = logging.getLogger(__name__)
+
+# Every money movement in this app (Paystack funding, withdrawals) is in
+# naira, so the account balance is reported in the same unit.
+ACCOUNT_CURRENCY = 'NGN'
 
 
 def _log(actor, action, target='', details=None):
@@ -58,24 +62,80 @@ def _kyc_serialize(v):
     }
 
 
+def _legacy_kyc_records(user):
+    """Legacy single-document verifications, newest first.
+
+    Never raises: a missing table must not turn ``GET /api/account/`` into a
+    500. The error is logged so it stays diagnosable.
+    """
+    try:
+        return list(user.identity_verifications.all())
+    except DatabaseError:
+        logger.exception(
+            'Could not read the legacy identity verifications for user %s.',
+            getattr(user, 'pk', None),
+        )
+        return []
+
+
+def _balance_number(value):
+    """Balance as a plain number, never ``None``.
+
+    The frontend renders this straight into a currency string, so a null
+    here used to render as a broken value. Anything unusable becomes 0.
+    """
+    try:
+        amount = Decimal(str(value))
+    except (TypeError, ValueError, ArithmeticError):
+        logger.exception('Unusable balance value on profile: %r', value)
+        return 0.0
+    if not amount.is_finite():
+        return 0.0
+    return float(amount)
+
+
 def _account_status(user):
+    """The account payload shared by ``GET /api/account/`` and the type switch.
+
+    Both spellings of every field are returned and are always equal, so the
+    deployed frontend (camelCase) and any new client (snake_case) cannot
+    drift apart:
+
+        account_type / accountType          'demo' | 'live'
+        balance / availableBalance          number, never null
+        currency                            ISO code of the wallet ('NGN')
+        verification_status / kycStatus     'none'|'pending'|'verified'|'rejected'
+        can_trade_live / liveVerified       whether live trading is unlocked
+    """
     profile = _with_profile(user)
-    kyc = list(user.identity_verifications.all())
+    kyc = _legacy_kyc_records(user)
     approved = kyc_user_is_verified(user)
     pending = any(k.status == 'pending' for k in kyc)
+    # Unified status across the legacy document flow and the new kyc app.
+    verification_status = kyc_current_status(user)
+    balance = _balance_number(profile.available_balance)
+    account_type = profile.account_type or 'demo'
     return {
-        'accountType': profile.account_type,
-        'availableBalance': float(profile.available_balance),
+        'accountType': account_type,
+        'availableBalance': balance,
         'liveVerified': approved,
         'kycPending': pending,
-        # Unified status across the legacy document flow and the new kyc app.
-        'kycStatus': kyc_current_status(user),
+        'kycStatus': verification_status,
         'kyc': [_kyc_serialize(k) for k in kyc],
         'fees': {
             'fundingPercent': settings.FUNDING_FEE_PERCENT,
             'withdrawalPercent': settings.WITHDRAWAL_FEE_PERCENT,
             'minWithdrawal': settings.MIN_WITHDRAWAL,
         },
+        # Flat aliases with the documented names. The camelCase keys above
+        # are the contract the deployed frontend already uses; these are the
+        # same values under their canonical names so both shapes stay in
+        # sync and neither can drift.
+        'account_type': account_type,
+        'balance': balance,
+        'currency': ACCOUNT_CURRENCY,
+        'verification_status': verification_status,
+        'can_trade_live': approved,
     }
 
 

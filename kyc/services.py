@@ -8,7 +8,7 @@ import logging
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from .crypto import mask_value
@@ -27,25 +27,74 @@ def get_or_create_profile(user) -> KYCProfile:
     return profile
 
 
+def _load_profile(user):
+    """Read the user's KYC profile without ever raising.
+
+    Returns ``(profile, error)``. ``profile`` is ``None`` when the user has
+    no profile yet; ``error`` is a short string when the table could not be
+    read at all -- the classic "relation \\"kyc_kycprofile\\" does not exist"
+    that used to turn ``GET /api/account/`` into a 500.
+
+    The failure is logged with a full traceback so it stays visible in the
+    platform logs; it is only the *response* that degrades.
+    """
+    try:
+        return KYCProfile.objects.filter(user=user).first(), None
+    except DatabaseError:
+        logger.exception(
+            'Could not read the KYC profile for user %s. '
+            'Is the kyc migration applied on this database?',
+            getattr(user, 'pk', None),
+        )
+        return None, 'database-error'
+
+
+def _legacy_statuses(user) -> set[str]:
+    """Statuses present in the legacy single-document KYC table.
+
+    Returns an empty set when that table cannot be read; the caller treats
+    "no information" the same as "not verified".
+    """
+    try:
+        rows = user.identity_verifications.values_list('status', flat=True)
+        return set(rows)
+    except DatabaseError:
+        logger.exception(
+            'Could not read the legacy identity verifications for user %s.',
+            getattr(user, 'pk', None),
+        )
+        return set()
+
+
 def user_is_verified(user) -> bool:
-    """True when the user may use live-account features."""
-    profile = KYCProfile.objects.filter(user=user).first()
+    """True when the user may use live-account features.
+
+    Never raises: if the KYC tables cannot be read the answer is ``False``
+    (fail closed -- no live access without proof of verification) and the
+    underlying error is logged.
+    """
+    profile, error = _load_profile(user)
+    if error:
+        return False
     if profile is not None and profile.status == 'verified':
         return True
     # Legacy single-document KYC still counts.
-    return user.identity_verifications.filter(status='approved').exists()
+    return 'approved' in _legacy_statuses(user)
 
 
 def current_status(user) -> str:
     """Effective KYC status for display ('none'|'pending'|'verified'|'rejected')."""
-    profile = KYCProfile.objects.filter(user=user).first()
+    profile, error = _load_profile(user)
+    if error:
+        return 'none'
     if profile is not None and profile.status != 'none':
         return profile.status
-    if user.identity_verifications.filter(status='approved').exists():
+    legacy = _legacy_statuses(user)
+    if 'approved' in legacy:
         return 'verified'
-    if user.identity_verifications.filter(status='pending').exists():
+    if 'pending' in legacy:
         return 'pending'
-    if user.identity_verifications.filter(status='rejected').exists():
+    if 'rejected' in legacy:
         return 'rejected'
     return 'none'
 

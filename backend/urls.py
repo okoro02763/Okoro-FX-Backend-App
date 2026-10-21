@@ -20,7 +20,11 @@ from .health import health
 urlpatterns = [
     path('admin/', admin.site.urls),
     # Public readiness probe: DB reachable + no unapplied migrations.
+    # Both the bare and the trailing-slash form answer, because
+    # APPEND_SLASH is off (a slash redirect would break the CORS
+    # preflight), so "/api/health/" would otherwise be a 404.
     path('api/health', health, name='health'),
+    path('api/health/', health, name='health-slash'),
     path('api/', include('forex.urls')),
     path('api/market/', include('market.urls')),
     path('api/trading/', include('trading.urls')),
