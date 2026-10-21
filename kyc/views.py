@@ -8,6 +8,7 @@ import logging
 
 from django.conf import settings
 from django.core import signing
+from django.db import DatabaseError
 from django.http import FileResponse, Http404
 from django.utils import timezone
 from rest_framework import status
@@ -37,6 +38,14 @@ from .validators import FileValidationError, sniff_content_type
 
 logger = logging.getLogger('kyc')
 
+
+def _server_error_response():
+    """Return a friendly 500 without leaking internals."""
+    return Response(
+        {'detail': 'Something went wrong, please try again', 'code': 'server_error'},
+        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
+
 VALID_DOC_TYPES = {
     'national_id', 'passport', 'drivers_license', 'voters_card', 'nin', 'bvn',
 }
@@ -60,60 +69,71 @@ def _kyc_throttle():
 @permission_classes([IsAuthenticated])
 def kyc_status(request):
     """Current status + draft details + documents. No sensitive fields."""
-    profile = get_or_create_profile(request.user)
-    return Response(serialize_profile(profile))
+    try:
+        profile = get_or_create_profile(request.user)
+        return Response(serialize_profile(profile))
+    except DatabaseError:
+        logger.exception('KYC status failed for user %s', getattr(request.user, 'pk', None))
+        return _server_error_response()
+    except Exception:  # noqa: BLE001
+        logger.exception('KYC status failed for user %s', getattr(request.user, 'pk', None))
+        return _server_error_response()
 
 
 @api_view(['PUT'])
 @authentication_classes([BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
 def save_details(request):
-    """Save step 1 (personal details) as a draft.
+    """Save step 1 (personal details) as a draft."""
+    try:
+        profile = get_or_create_profile(request.user)
+        if profile.status == 'pending':
+            return _err('Your documents are under review and cannot be edited.', status.HTTP_409_CONFLICT)
+        if profile.status == 'verified':
+            return _err('Your identity is already verified.', status.HTTP_409_CONFLICT)
 
-    The wizard calls this on every Continue so a refresh never loses work.
-    """
-    profile = get_or_create_profile(request.user)
-    if profile.status == 'pending':
-        return _err('Your documents are under review and cannot be edited.', status.HTTP_409_CONFLICT)
-    if profile.status == 'verified':
-        return _err('Your identity is already verified.', status.HTTP_409_CONFLICT)
+        data = request.data or {}
+        full_name = str(data.get('fullName') or '').strip()
+        dob_raw = str(data.get('dateOfBirth') or '').strip()
+        country = str(data.get('country') or '').strip()
+        phone = str(data.get('phone') or '').strip()
+        address_line = str(data.get('addressLine') or '').strip()
+        city = str(data.get('city') or '').strip()
+        state_name = str(data.get('state') or '').strip()
+        postal_code = str(data.get('postalCode') or '').strip()
 
-    data = request.data or {}
-    full_name = str(data.get('fullName') or '').strip()
-    dob_raw = str(data.get('dateOfBirth') or '').strip()
-    country = str(data.get('country') or '').strip()
-    phone = str(data.get('phone') or '').strip()
-    address_line = str(data.get('addressLine') or '').strip()
-    city = str(data.get('city') or '').strip()
-    state_name = str(data.get('state') or '').strip()
-    postal_code = str(data.get('postalCode') or '').strip()
+        date_of_birth = None
+        if dob_raw:
+            try:
+                date_of_birth = timezone.datetime.strptime(dob_raw, '%Y-%m-%d').date()
+            except ValueError:
+                return _err('dateOfBirth must be YYYY-MM-DD.')
 
-    date_of_birth = None
-    if dob_raw:
-        try:
-            date_of_birth = timezone.datetime.strptime(dob_raw, '%Y-%m-%d').date()
-        except ValueError:
-            return _err('dateOfBirth must be YYYY-MM-DD.')
+        # Server-side 18+ check (the client checks too, but never trust it).
+        if date_of_birth is not None:
+            today = timezone.now().date()
+            age = today.year - date_of_birth.year - (
+                (today.month, today.day) < (date_of_birth.month, date_of_birth.day)
+            )
+            if age < 18:
+                return _err('You must be at least 18 years old to verify.')
 
-    # Server-side 18+ check (the client checks too, but never trust it).
-    if date_of_birth is not None:
-        today = timezone.now().date()
-        age = today.year - date_of_birth.year - (
-            (today.month, today.day) < (date_of_birth.month, date_of_birth.day)
-        )
-        if age < 18:
-            return _err('You must be at least 18 years old to verify.')
-
-    profile.full_name = full_name[:150]
-    profile.date_of_birth = date_of_birth
-    profile.country = country[:80]
-    profile.phone = phone[:40]
-    profile.address_line = address_line[:255]
-    profile.city = city[:100]
-    profile.state = state_name[:100]
-    profile.postal_code = postal_code[:20]
-    profile.save()
-    return Response(serialize_profile(profile))
+        profile.full_name = full_name[:150]
+        profile.date_of_birth = date_of_birth
+        profile.country = country[:80]
+        profile.phone = phone[:40]
+        profile.address_line = address_line[:255]
+        profile.city = city[:100]
+        profile.state = state_name[:100]
+        profile.postal_code = postal_code[:20]
+        profile.save()
+        return Response(serialize_profile(profile))
+    except DatabaseError:
+        logger.exception('Save KYC details failed for user %s', getattr(request.user, 'pk', None))
+        return _server_error_response()
+    except Exception:  # noqa: BLE001
+        logger.exception('Save KYC details failed for user %s', getattr(request.user, 'pk', None))
+        return _server_error_response()
 
 
 @api_view(['POST'])

@@ -23,8 +23,17 @@ RESUBMIT_WINDOW = timedelta(hours=24)
 
 
 def get_or_create_profile(user) -> KYCProfile:
-    profile, _ = KYCProfile.objects.get_or_create(user=user)
-    return profile
+    """Get or create a profile, never raising on missing table."""
+    try:
+        profile, _ = KYCProfile.objects.get_or_create(user=user)
+        return profile
+    except DatabaseError:
+        logger.exception(
+            'Could not get/create the KYC profile for user %s. '
+            'Is the kyc migration applied on this database?',
+            getattr(user, 'pk', None),
+        )
+        raise
 
 
 def _load_profile(user):
