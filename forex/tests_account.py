@@ -9,6 +9,7 @@ instead of failing, and the underlying error must still reach the logs.
 
 from decimal import Decimal
 from unittest import mock
+import threading
 
 from django.contrib.auth import get_user_model
 from django.db import ProgrammingError
@@ -189,3 +190,54 @@ class HealthEndpointTests(TestCase):
         response = self.client.get('/api/health')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['status'], 'ok')
+
+
+class DerivClientStartupTests(TestCase):
+    """The live Deriv connection must not start outside a serving process.
+
+    ``forex.apps.ForexConfig.ready`` used to gate the connection on
+    ``sys.argv[1] not in ['runserver', ...]``. Under WSGI/ASGI servers argv is
+    e.g. ``['gunicorn', 'backend.wsgi']``, so ``argv[1]`` is a module path and
+    the connection started on every production boot -- including
+    ``collectstatic`` during the Render build, where a non-daemon reconnect
+    timer kept the process alive until the platform killed it. The build then
+    never reached the migrate step, which is what left ``kyc_kycprofile``
+    missing in production.
+    """
+
+    def test_disabled_unless_explicitly_opted_in(self):
+        """No RUN_DERIV_CLIENT flag -> the app must not open a connection."""
+        from forex.apps import ForexConfig
+
+        config = ForexConfig.create('forex')
+        with mock.patch.dict('os.environ', {}, clear=False):
+            import os
+
+            os.environ.pop('RUN_DERIV_CLIENT', None)
+            with mock.patch('threading.Thread') as thread:
+                config.ready()
+            thread.assert_not_called()
+
+    def test_enabled_only_for_a_serving_command(self):
+        """With the flag set, a management command still skips the client."""
+        from forex.apps import ForexConfig
+
+        config = ForexConfig.create('forex')
+        with mock.patch.dict('os.environ', {'RUN_DERIV_CLIENT': 'True'}):
+            with mock.patch('sys.argv', ['manage.py', 'collectstatic']):
+                with mock.patch('threading.Thread') as thread:
+                    config.ready()
+                thread.assert_not_called()
+
+    def test_starts_when_opted_in_and_serving(self):
+        """The happy path still works: flag on + serving entry point."""
+        from forex.apps import ForexConfig
+
+        config = ForexConfig.create('forex')
+        with mock.patch.dict('os.environ', {'RUN_DERIV_CLIENT': 'True'}):
+            with mock.patch('sys.argv', ['gunicorn', 'backend.wsgi']):
+                with mock.patch('forex.deriv_client.start_deriv_connection'):
+                    with mock.patch('threading.Thread') as thread:
+                        config.ready()
+                    thread.assert_called_once()
+

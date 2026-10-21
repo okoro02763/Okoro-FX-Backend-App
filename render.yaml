@@ -21,15 +21,24 @@ services:
     # "bash build.sh" rather than "./build.sh": the executable bit is not
     # preserved on every checkout, and a build that cannot start would fail
     # the deploy before it even reaches the migrations.
+    #
+    # NOTE: this is the *default* for a Blueprint-managed service. A service
+    # created by hand in the dashboard ignores this file and uses whatever is
+    # typed into Settings -> Build Command (Render's fallback is
+    # "pip install -r requirements.txt"). Either way build.sh is what should
+    # run; the start command below is what actually guarantees migrate.
     buildCommand: bash build.sh
     # Honoured on paid plans only; harmless (idempotent) everywhere else.
     preDeployCommand: python manage.py migrate --noinput
     # Every plan: apply the migrations, then serve. If the migration fails
     # the process exits and Render cancels the deploy instead of routing
     # traffic to an instance that would answer 500 on every API call.
-    # "exec" hands the process over to daphne so Render's SIGTERM on
-    # shutdown reaches the server instead of the wrapping shell.
-    startCommand: sh -c "python manage.py migrate --noinput && exec daphne -b 0.0.0.0 -p $PORT backend.asgi:application"
+    #
+    # The echo is deliberate: it makes "did migrations actually run?"
+    # answerable from the deploy log alone. "exec" then hands the process over
+    # to daphne so Render's SIGTERM on shutdown reaches the server instead of
+    # the wrapping shell.
+    startCommand: sh -c "echo '==> Applying migrations' && python manage.py migrate --noinput && echo '==> Starting daphne' && exec daphne -b 0.0.0.0 -p $PORT backend.asgi:application"
     envVars:
       - key: PYTHON_VERSION
         value: "3.12"

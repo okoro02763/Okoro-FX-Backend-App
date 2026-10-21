@@ -364,6 +364,14 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Where ``collectstatic`` gathers everything for deployment. Without this,
+# Django defaults to <app>/static and Render's collector either scatters files
+# or (via the platform default of ``--noinput`` against an empty root) leaves
+# ADMIN/REST_FRAMEWORK assets unserved -- hence the 404 storm on
+# /static/rest_framework/... when the browsable API (e.g. /api/health) is
+# opened in a browser.
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
 # Uploaded files (e.g. KYC documents)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')

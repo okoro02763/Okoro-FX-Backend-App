@@ -35,4 +35,10 @@ if ! python manage.py checkmigrations; then
     exit 1
 fi
 
+# Collect ADMIN/REST_FRAMEWORK assets so the browsable API and the admin do not
+# 404 on their own stylesheets in production. Harmless if storage is already
+# populated; ``--noinput`` keeps it non-interactive.
+echo "==> Collecting static files"
+python manage.py collectstatic --noinput --clear
+
 echo "==> Build OK"

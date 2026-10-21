@@ -107,9 +107,18 @@ class DerivAPIClient:
         """Handle WebSocket connection close"""
         logger.info("Deriv API connection closed")
         self.is_connected = False
-        
-        # Attempt to reconnect after 5 seconds
-        threading.Timer(5.0, self.connect).start()
+
+        # Attempt to reconnect after 5 seconds.
+        #
+        # The timer thread must be a daemon. threading.Timer defaults to
+        # inheriting the *creating* thread's daemon flag, and Python's
+        # interpreter waits for every non-daemon thread at exit -- so a
+        # non-daemon timer here kept the whole process alive after its work was
+        # done. That is what made ``manage.py collectstatic`` hang indefinitely
+        # during the Render build.
+        timer = threading.Timer(5.0, self.connect)
+        timer.daemon = True
+        timer.start()
 
     def authorize(self):
         """Authorize with Deriv API using token"""
