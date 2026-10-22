@@ -18,6 +18,10 @@ from .email_service import send_template_email
 from .models import AuditLog, Invite, PasswordResetToken, Profile
 from .referral import ensure_referral_code, get_referrer_profile, process_referral
 
+import logging
+
+logger = logging.getLogger('forex.auth')
+
 User = get_user_model()
 
 # Base URL of the frontend, used when constructing password-reset links.
@@ -100,20 +104,28 @@ def login(request):
     token, _ = Token.objects.get_or_create(user=user)
 
     # Login alert -- fire-and-forget, never blocks the sign-in response.
+    # The provider call used to run inline: a slow (or out-of-credit, i.e. 402)
+    # Termii account turned every login into a slow login. Delivery now happens
+    # on a background thread with a bounded timeout and never breaks the
+    # response.
     ip_address = (
         (request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')[0].strip()
         or request.META.get('REMOTE_ADDR', '')
     )
-    send_template_email(
-        'login_alert',
-        user.email,
-        {
-            'name': user.first_name or 'there',
-            'ip_address': ip_address or 'Unknown',
-            'user_agent': request.META.get('HTTP_USER_AGENT', '') or 'Unknown',
-            'login_time': timezone.localtime(),
-        },
-    )
+    try:
+        send_template_email(
+            'login_alert',
+            user.email,
+            {
+                'name': user.first_name or 'there',
+                'ip_address': ip_address or 'Unknown',
+                'user_agent': request.META.get('HTTP_USER_AGENT', '') or 'Unknown',
+                'login_time': timezone.localtime(),
+            },
+            background=True,
+        )
+    except Exception:  # noqa: BLE001 - alerts must never fail a login
+        logger.warning('Could not queue login alert email for user %s', user.pk)
 
     return Response({'token': token.key, 'user': serialize_user(user)})
 

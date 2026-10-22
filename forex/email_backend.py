@@ -54,7 +54,13 @@ class TermiiEmailBackend(BaseEmailBackend):
         self.body_variable = (
             getattr(settings, 'TERMII_BODY_VARIABLE', 'message') or 'message'
         )
-        self.timeout = getattr(settings, 'TERMII_TIMEOUT', 30)
+        # A provider call that hangs is worse than no call at all: the email is
+        # fire-and-forget, so a slow Termii must not hold the request open.
+        self.timeout = float(
+            getattr(settings, 'TERMII_TIMEOUT', None)
+            or getattr(settings, 'EMAIL_TIMEOUT', 5)
+            or 5
+        )
 
     def send_messages(self, email_messages):
         """Send one or more EmailMessage objects; returns the number sent."""
@@ -113,6 +119,8 @@ class TermiiEmailBackend(BaseEmailBackend):
             data = response.json()
         except (requests.RequestException, ValueError) as exc:
             if self.fail_silently:
+                # One warning per failed delivery attempt; never raise into the
+                # (fire-and-forget) caller, and never log recipient secrets.
                 logger.warning('Termii email to %s failed: %s', recipient, exc)
                 return False
             raise TermiiEmailError(

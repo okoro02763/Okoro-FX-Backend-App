@@ -25,6 +25,7 @@ backend to the locmem backend or mock ``_uses_termii``/``_transport_configured``
 """
 import logging
 import os
+import threading
 
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives, get_connection
@@ -237,12 +238,17 @@ def send_template_email(
     subject=None,
     template_id=None,
     defer=False,
+    background=False,
 ):
     """Render and send one email. Never raises on delivery failure.
 
     ``defer=True`` wraps the send in ``transaction.on_commit`` so a message is
     only dispatched once the surrounding database change is committed, and
     never on a rolled-back webhook retry.
+
+    ``background=True`` dispatches the send on a daemon thread, so a slow or
+    failing provider can never block or break the HTTP request that triggered
+    it. The login alert (and any other low-priority notification) uses this.
     """
     if not to_email:
         return None
@@ -281,7 +287,25 @@ def send_template_email(
             return None
         return msg
 
+    def _dispatch():
+        try:
+            _send()
+        except Exception as exc:  # noqa: BLE001 - never propagate from a thread
+            logger.warning('Background email send failed [%s]: %s', name, exc)
+
     if defer:
         transaction.on_commit(_send)
         return None
+
+    if background:
+        # Fire-and-forget delivery: the caller (usually an HTTP view) never
+        # waits on the provider and never sees a delivery failure.
+        worker = threading.Thread(
+            target=_dispatch,
+            name=f'forex-email-{name}',
+            daemon=True,
+        )
+        worker.start()
+        return None
+
     return _send()

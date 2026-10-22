@@ -300,6 +300,7 @@ def serialize_profile(profile: KYCProfile) -> dict:
             'postalCode': profile.postal_code,
         },
         'docType': profile.doc_type or None,
+        'doc_type': profile.doc_type or None,
         'docNumberMasked': mask_value(number) if has_number else None,
         # Whether a document number is stored, and its last four digits.
         # The review screen renders from these instead of from whatever the
@@ -307,7 +308,8 @@ def serialize_profile(profile: KYCProfile) -> dict:
         # server never received.
         'hasDocumentNumber': has_number,
         'documentNumberLast4': last4,
-        # The same two values under their canonical names.
+        # The same two values under their canonical snake_case names, so any
+        # client (and the admin tooling) can read them without guessing.
         'has_document_number': has_number,
         'document_number_last4': last4,
         'documents': [

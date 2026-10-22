@@ -81,23 +81,37 @@ if not DEBUG and not _extra_allowed_hosts:
 # ===========================
 # Termii (https://developers.termii.com) is a template-based email API, so when
 # TERMII_API_KEY is present it becomes the default transport. An explicit
-# EMAIL_BACKEND always wins; otherwise we fall back to SMTP, or to the console
-# backend in local DEBUG when no transport is configured.
+# EMAIL_BACKEND always wins; otherwise EMAIL_PROVIDER selects the transport.
 TERMII_API_KEY = os.getenv('TERMII_API_KEY', '')
 TERMII_BASE_URL = os.getenv('TERMII_BASE_URL', 'https://v4.api.termii.com')
 TERMII_EMAIL_CONFIG_ID = os.getenv('TERMII_EMAIL_CONFIG_ID', '')
 TERMII_TEMPLATE_ID = os.getenv('TERMII_TEMPLATE_ID', '')
 TERMII_BODY_VARIABLE = os.getenv('TERMII_BODY_VARIABLE', 'message')
-TERMII_TIMEOUT = int(os.getenv('TERMII_TIMEOUT', '30'))
+TERMII_TIMEOUT = float(os.getenv('TERMII_TIMEOUT') or os.getenv('EMAIL_TIMEOUT') or 5)
 
-EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', '')
+# Email provider: 'termii' | 'smtp' | 'console'. Selects the transport without
+# code changes. Local development defaults to 'console' (nothing is really sent);
+# production sets EMAIL_PROVIDER=termii (or smtp) via the environment.
+EMAIL_PROVIDER = os.getenv('EMAIL_PROVIDER', 'console').strip().lower()
+if EMAIL_PROVIDER not in {'termii', 'smtp', 'console'}:
+    EMAIL_PROVIDER = 'console'
+
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', '').strip()
 if not EMAIL_BACKEND:
-    if TERMII_API_KEY:
+    # EMAIL_PROVIDER is the switchboard: 'termii' | 'smtp' | 'console'.
+    # It defaults to 'console' locally and is set to 'termii' in production via
+    # the environment, so switching providers never means touching code.
+    if EMAIL_PROVIDER == 'termii':
         EMAIL_BACKEND = 'forex.email_backend.TermiiEmailBackend'
-    elif DEBUG:
-        EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
-    else:
+    elif EMAIL_PROVIDER == 'smtp':
         EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+    else:
+        EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+# How long a single email provider call may take before it is abandoned.
+# Login/alert emails fire-and-forget, but a wedged provider must not hold a
+# request hostage for a minute.
+EMAIL_TIMEOUT = float(os.getenv('EMAIL_TIMEOUT', '5'))
 
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '465'))
