@@ -11,7 +11,7 @@ from django.conf import settings
 from django.db import DatabaseError, transaction
 from django.utils import timezone
 
-from .crypto import mask_value
+from .crypto import encrypt_value, mask_value
 from .models import KYCProfile
 from .providers import get_provider
 
@@ -132,6 +132,38 @@ def current_status(user) -> str:
     return 'none'
 
 
+def apply_document_fields(profile: KYCProfile, doc_type=None, doc_number=None) -> list[str]:
+    """Store the document type and number on the profile.
+
+    Returns the names of the fields that actually changed. The number is
+    encrypted before it touches the database and is never echoed back.
+
+    An empty value never overwrites a stored one. That rule is what makes the
+    wizard safe: a client that sends ``docNumber: ""`` must not be able to
+    erase a number that was saved earlier, and uploading a file must not
+    clear the number that was entered in the previous step.
+    """
+    changed: list[str] = []
+
+    if doc_type:
+        doc_type = str(doc_type).strip().lower()[:30]
+        if doc_type and doc_type != profile.doc_type:
+            profile.doc_type = doc_type
+            changed.append('doc_type')
+
+    if doc_number:
+        doc_number = str(doc_number).strip()
+        if doc_number:
+            profile.doc_number_encrypted = encrypt_value(doc_number)
+            changed.append('doc_number_encrypted')
+
+    if changed:
+        # `updated_at` is auto_now, so it has to be listed explicitly when a
+        # partial save is used.
+        profile.save(update_fields=[*changed, 'updated_at'])
+    return changed
+
+
 def can_submit(profile: KYCProfile) -> tuple[bool, str]:
     """Rate-limit submissions: `RESUBMIT_LIMIT` per `RESUBMIT_WINDOW`."""
     now = timezone.now()
@@ -249,6 +281,9 @@ def reject_profile(profile: KYCProfile, reason: str, reviewer=None) -> None:
 def serialize_profile(profile: KYCProfile) -> dict:
     """Public, non-sensitive representation. Never includes the raw
     document number -- only the masked tail."""
+    number = _decrypt(profile)
+    has_number = bool(profile.doc_number_encrypted)
+    last4 = number[-4:] if number else ''
     return {
         'status': profile.status,
         'rejectionReason': profile.rejection_reason or None,
@@ -265,7 +300,16 @@ def serialize_profile(profile: KYCProfile) -> dict:
             'postalCode': profile.postal_code,
         },
         'docType': profile.doc_type or None,
-        'docNumberMasked': mask_value(_decrypt(profile)) if profile.doc_number_encrypted else None,
+        'docNumberMasked': mask_value(number) if has_number else None,
+        # Whether a document number is stored, and its last four digits.
+        # The review screen renders from these instead of from whatever the
+        # browser happens to be holding, so it can never show a number the
+        # server never received.
+        'hasDocumentNumber': has_number,
+        'documentNumberLast4': last4,
+        # The same two values under their canonical names.
+        'has_document_number': has_number,
+        'document_number_last4': last4,
         'documents': [
             {
                 'id': doc.id,

@@ -63,12 +63,52 @@ def _truthy(value: str) -> bool:
     return value.strip().lower() in {'true', '1', 'yes', 'on'}
 
 
+def enforce_kyc_encryption_key() -> None:
+    """Fail fast at boot when the KYC encryption key is not configured.
+
+    The document-number cipher comes from the ``KYC_ENCRYPTION_KEY``
+    environment variable. In development a key is derived from ``SECRET_KEY``
+    so the flow works with zero setup; in production there is no fallback, and
+    ``kyc.crypto`` already refuses to build a Fernet without an explicit key.
+
+    Called from the WSGI boot path so a misconfigured deployment fails loudly
+    at startup instead of surfacing as an opaque error on the first KYC
+    document upload.
+    """
+    from django.core.exceptions import ImproperlyConfigured
+
+    from kyc import crypto as kyc_crypto
+
+    try:
+        kyc_crypto.get_fernet()
+    except (kyc_crypto.KycCryptoError, ValueError, TypeError) as exc:
+        # KycCryptoError: no key in production. ValueError/TypeError: the key
+        # is set but is not a valid Fernet key. Both are a misconfiguration
+        # that must be fixed by a human, so both stop the boot with a clear
+        # message instead of surfacing later as a failed upload.
+        logger.error('KYC encryption key is not configured correctly: %s', exc)
+        raise ImproperlyConfigured(
+            'KYC_ENCRYPTION_KEY must be set to a valid Fernet key in production. '
+            'Generate one with: python -c "from cryptography.fernet import Fernet; '
+            'print(Fernet.generate_key().decode())"'
+        ) from exc
+
+
 def migrate_on_startup() -> None:
     """Bring the database schema up to date, logging and swallowing errors.
 
     Called from ``backend.wsgi`` once the Django app is ready. Never raises:
     a boot failure would turn a degraded service into an unavailable one.
+
+    Also refuses to serve when the KYC encryption key is missing in
+    production -- see :func:`enforce_kyc_encryption_key`.
     """
+    # Fail fast when the KYC encryption key is missing: document numbers are
+    # encrypted at rest before they are stored, and in production there is no
+    # development fallback. Booting with a missing key would only surface the
+    # problem on the first document upload, mid-flow, as a confusing error.
+    enforce_kyc_encryption_key()
+
     # Off switch for anyone who wants migrations to stay a manual step.
     if not _truthy(os.getenv('AUTO_MIGRATE', 'True')):
         logger.info('AUTO_MIGRATE is off; skipping the startup migration.')

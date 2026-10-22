@@ -20,8 +20,11 @@ django_asgi_app = get_asgi_application()
 # Apply outstanding migrations before serving, for the same reason as
 # backend/wsgi.py: the deploy platform may boot either entry point and neither
 # the start command nor render.yaml is guaranteed to run migrate.
-from backend.startup import migrate_on_startup  # noqa: E402
+from backend.startup import enforce_kyc_encryption_key, migrate_on_startup  # noqa: E402
 
+# Fail loudly when the document-number cipher has no key, exactly as the
+# WSGI entry point does.
+enforce_kyc_encryption_key()
 migrate_on_startup()
 
 from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402

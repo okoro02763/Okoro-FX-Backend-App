@@ -9,7 +9,9 @@ https://docs.djangoproject.com/en/4.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
+import base64
 import os
+import sys
 from decimal import Decimal
 from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
@@ -384,8 +386,30 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 KYC_PRIVATE_ROOT = os.getenv('KYC_PRIVATE_ROOT', os.path.join(BASE_DIR, 'private_media'))
 # Fernet key for encrypting document numbers at rest. Generate with:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-# Mandatory in production (see kyc.crypto); derived from SECRET_KEY in DEBUG.
+#
+# Mandatory in production. Without it, kyc.crypto raises at the first save,
+# which surfaces as an opaque 503 long after the deploy -- so the app refuses
+# to start instead. The key is deliberately *not* derived from SECRET_KEY in
+# production: rotating SECRET_KEY would then make every stored document
+# number undecryptable, and anyone holding SECRET_KEY could read them.
+#
+# In DEBUG the key is derived from SECRET_KEY (see kyc.crypto) so the flow
+# works with zero setup locally.
 KYC_ENCRYPTION_KEY = os.getenv('KYC_ENCRYPTION_KEY', '').strip()
+if not KYC_ENCRYPTION_KEY and 'test' in sys.argv:
+    # Django's test runner forces DEBUG=False for the whole run, so the
+    # production check below would refuse to start the suite. The tests get a
+    # throwaway key instead: the cipher is exercised for real, nothing that
+    # matters is encrypted with it, and it stays the same for the whole run.
+    KYC_ENCRYPTION_KEY = base64.urlsafe_b64encode(os.urandom(32)).decode('ascii')
+    os.environ['KYC_ENCRYPTION_KEY'] = KYC_ENCRYPTION_KEY
+if not DEBUG and not KYC_ENCRYPTION_KEY:
+    raise ImproperlyConfigured(
+        'KYC_ENCRYPTION_KEY must be set in production: document numbers cannot '
+        'be encrypted without it. Generate one with: python -c "from '
+        'cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" '
+        'and add it to the service environment.'
+    )
 # Review backend: 'manual' (staff review in the admin -- the default).
 # A future automated provider (e.g. Smile Identity) plugs in here.
 KYC_PROVIDER = os.getenv('KYC_PROVIDER', 'manual').strip().lower()

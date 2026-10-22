@@ -25,6 +25,7 @@ application = get_wsgi_application()
 #
 # It must come after get_wsgi_application() (Django has to be set up first)
 # and it never raises -- see backend/startup.py for the reasoning.
-from backend.startup import migrate_on_startup  # noqa: E402
+from backend.startup import enforce_kyc_encryption_key, migrate_on_startup  # noqa: E402
 
+enforce_kyc_encryption_key()
 migrate_on_startup()

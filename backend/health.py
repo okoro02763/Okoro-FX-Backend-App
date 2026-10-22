@@ -14,6 +14,7 @@ only booleans and the names of any unapplied migrations.
 
 import logging
 
+from django.conf import settings
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from rest_framework.decorators import api_view, permission_classes
@@ -21,6 +22,20 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 logger = logging.getLogger(__name__)
+
+
+def _encryption_state() -> str:
+    """How the KYC document-number key is configured.
+
+    ``configured`` -- a dedicated KYC_ENCRYPTION_KEY is set (what production
+    must have). ``derived`` -- development only, the key is derived from
+    SECRET_KEY. ``missing`` -- no key at all; KYC cannot encrypt anything.
+
+    Only the state is reported, never the key.
+    """
+    if getattr(settings, 'KYC_ENCRYPTION_KEY', ''):
+        return 'configured'
+    return 'derived' if settings.DEBUG else 'missing'
 
 
 def _unapplied_migrations():
@@ -52,6 +67,9 @@ def health(request):
         'database': 'ok',
         'migrations': 'ok',
         'unapplied_migrations': [],
+        # Whether document numbers can be encrypted with the operator's own
+        # key. 'configured' is the only acceptable value in production.
+        'encryption': _encryption_state(),
     }
     http_status = 200
 

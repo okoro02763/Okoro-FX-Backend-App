@@ -24,6 +24,35 @@
 # is behind the code must not go out.
 set -euo pipefail
 
+# ---------------------------------------------------------------------------
+# Configuration preflight
+#
+# This runs before any manage.py command, because Django's settings module
+# refuses to import without KYC_ENCRYPTION_KEY in production and the
+# resulting traceback is a lot less helpful than the message below.
+#
+# Failing the *build* rather than the deploy is deliberate: the currently
+# running release keeps serving traffic, so a missing secret can never take
+# the site down.
+# ---------------------------------------------------------------------------
+if [ "${DEBUG:-False}" = "False" ] || [ "${DEBUG:-False}" = "false" ]; then
+    if [ -z "${KYC_ENCRYPTION_KEY:-}" ]; then
+        echo ""
+        echo "ERROR: KYC_ENCRYPTION_KEY is not set."
+        echo "       KYC document numbers (NIN, BVN, ID numbers) are encrypted with"
+        echo "       this key. Without it the app refuses to start, because it would"
+        echo "       otherwise have to fall back to a key derived from SECRET_KEY."
+        echo ""
+        echo "       Generate one with:"
+        echo "         python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+        echo ""
+        echo "       Then add it to the service environment (Dashboard -> Environment)"
+        echo "       and deploy again. Nothing has been changed by this failed build."
+        exit 1
+    fi
+    echo "==> KYC_ENCRYPTION_KEY is set"
+fi
+
 echo "==> Installing dependencies"
 pip install -r requirements.txt
 

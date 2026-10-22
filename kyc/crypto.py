@@ -50,7 +50,8 @@ def _build_fernet() -> Fernet:
     return Fernet(base64.urlsafe_b64encode(digest))
 
 
-def _get_fernet() -> Fernet:
+def get_fernet() -> Fernet:
+    """Return the memoised Fernet instance, building it on first use."""
     global _fernet
     with _lock:
         if _fernet is None:
@@ -62,7 +63,7 @@ def encrypt_value(plaintext: str) -> str:
     """Encrypt a document number for storage. Never logs the value."""
     if not plaintext:
         return ''
-    return _get_fernet().encrypt(plaintext.encode('utf-8')).decode('ascii')
+    return get_fernet().encrypt(plaintext.encode('utf-8')).decode('ascii')
 
 
 def decrypt_value(token: str) -> str:
@@ -70,7 +71,7 @@ def decrypt_value(token: str) -> str:
     if not token:
         return ''
     try:
-        return _get_fernet().decrypt(token.encode('ascii')).decode('utf-8')
+        return get_fernet().decrypt(token.encode('ascii')).decode('utf-8')
     except InvalidToken as exc:
         # Do not include the ciphertext in the message.
         raise KycCryptoError('Stored value could not be decrypted.') from exc

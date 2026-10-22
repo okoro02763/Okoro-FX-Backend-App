@@ -27,6 +27,7 @@ from .crypto import encrypt_value
 from .models import KYCProfile
 from .services import (
     KYCStorageUnavailable,
+    apply_document_fields,
     approve_profile,
     can_submit,
     get_or_create_profile,
@@ -61,8 +62,87 @@ SIGNED_URL_MAX_AGE = 300
 SIGNING_SALT = 'kyc.document'
 
 
-def _err(message: str, code: int = status.HTTP_400_BAD_REQUEST):
-    return Response({'message': message}, status=code)
+def _err(
+    message: str,
+    status_code: int = status.HTTP_400_BAD_REQUEST,
+    code: str = 'invalid_request',
+):
+    """Every error in this app uses the same body shape.
+
+    ``detail`` is the human-readable message and ``code`` is a stable
+    machine-readable slug the frontend can branch on (for example
+    ``kyc_incomplete``). The old ``message`` key is gone; the client reads
+    ``detail`` and still falls back to ``message`` so it keeps working
+    against a deployment that has not been updated yet.
+    """
+    return Response({'detail': message, 'code': code}, status=status_code)
+
+
+# The personal-detail fields the wizard sends, and where they land on the
+# profile. A key that is absent from the request body is left alone, which
+# is what lets the wizard save the document type and number on their own
+# without wiping the details, and the details without wiping the document.
+_DETAIL_FIELDS = {
+    'fullName': 'full_name',
+    'country': 'country',
+    'phone': 'phone',
+    'addressLine': 'address_line',
+    'city': 'city',
+    'state': 'state',
+    'postalCode': 'postal_code',
+}
+_DETAIL_MAX_LENGTHS = {
+    'full_name': 150,
+    'country': 80,
+    'phone': 40,
+    'address_line': 255,
+    'city': 100,
+    'state': 100,
+    'postal_code': 20,
+}
+
+# Document types that have a reverse side worth photographing.
+_NEEDS_BACK = {'national_id', 'drivers_license', 'voters_card'}
+# Document types that are a number only -- no image upload required.
+_NUMBER_ONLY = {'nin', 'bvn'}
+
+# The personal details that must be present before a submission is accepted.
+_REQUIRED_DETAILS = (
+    'full_name',
+    'date_of_birth',
+    'country',
+    'phone',
+    'address_line',
+    'city',
+    'state',
+    'postal_code',
+)
+
+
+def _missing_items(profile) -> list[str]:
+    """Everything still missing from the profile, as machine-readable keys.
+
+    All of it is reported at once so the client can show one list and send
+    the user to the right step, instead of revealing one problem per
+    submission attempt.
+    """
+    missing = [field for field in _REQUIRED_DETAILS if not getattr(profile, field)]
+
+    if not profile.doc_type:
+        missing.append('document_type')
+    if not profile.doc_number_encrypted:
+        missing.append('document_number')
+
+    kinds = set(profile.documents.values_list('kind', flat=True))
+    if 'selfie' not in kinds:
+        missing.append('selfie')
+    if profile.doc_type not in _NUMBER_ONLY:
+        if 'id_front' not in kinds:
+            missing.append('id_front')
+        if profile.doc_type in _NEEDS_BACK and 'id_back' not in kinds:
+            missing.append('id_back')
+
+    return missing
 
 
 def _kyc_throttle():
@@ -89,49 +169,96 @@ def kyc_status(request):
 @authentication_classes([BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
 def save_details(request):
-    """Save step 1 (personal details) as a draft."""
+    """Save the KYC draft.
+
+    Partial update: only the keys present in the request body are written.
+    The wizard saves the personal details in step 1 and the document type
+    and number in step 2, so each step has to be able to write its own
+    fields without wiping the others.
+
+    The document number is encrypted before it is stored and is never echoed
+    back in full.
+    """
     try:
         profile = get_or_create_profile(request.user)
         if profile.status == 'pending':
-            return _err('Your documents are under review and cannot be edited.', status.HTTP_409_CONFLICT)
+            return _err(
+                'Your documents are under review and cannot be edited.',
+                status.HTTP_409_CONFLICT,
+                'submission_locked',
+            )
         if profile.status == 'verified':
-            return _err('Your identity is already verified.', status.HTTP_409_CONFLICT)
+            return _err(
+                'Your identity is already verified.',
+                status.HTTP_409_CONFLICT,
+                'already_verified',
+            )
 
         data = request.data or {}
-        full_name = str(data.get('fullName') or '').strip()
-        dob_raw = str(data.get('dateOfBirth') or '').strip()
-        country = str(data.get('country') or '').strip()
-        phone = str(data.get('phone') or '').strip()
-        address_line = str(data.get('addressLine') or '').strip()
-        city = str(data.get('city') or '').strip()
-        state_name = str(data.get('state') or '').strip()
-        postal_code = str(data.get('postalCode') or '').strip()
+        changed: list[str] = []
 
-        date_of_birth = None
-        if dob_raw:
-            try:
-                date_of_birth = timezone.datetime.strptime(dob_raw, '%Y-%m-%d').date()
-            except ValueError:
-                return _err('dateOfBirth must be YYYY-MM-DD.')
+        # 1. Personal details (step 1).
+        for key, field in _DETAIL_FIELDS.items():
+            if key not in data:
+                continue
+            value = str(data.get(key) or '').strip()
+            setattr(profile, field, value[: _DETAIL_MAX_LENGTHS[field]])
+            changed.append(field)
 
-        # Server-side 18+ check (the client checks too, but never trust it).
-        if date_of_birth is not None:
-            today = timezone.now().date()
-            age = today.year - date_of_birth.year - (
-                (today.month, today.day) < (date_of_birth.month, date_of_birth.day)
-            )
-            if age < 18:
-                return _err('You must be at least 18 years old to verify.')
+        if 'dateOfBirth' in data:
+            dob_raw = str(data.get('dateOfBirth') or '').strip()
+            date_of_birth = None
+            if dob_raw:
+                try:
+                    date_of_birth = timezone.datetime.strptime(dob_raw, '%Y-%m-%d').date()
+                except ValueError:
+                    return _err(
+                        'dateOfBirth must be YYYY-MM-DD.',
+                        status.HTTP_400_BAD_REQUEST,
+                        'invalid_date_of_birth',
+                    )
 
-        profile.full_name = full_name[:150]
-        profile.date_of_birth = date_of_birth
-        profile.country = country[:80]
-        profile.phone = phone[:40]
-        profile.address_line = address_line[:255]
-        profile.city = city[:100]
-        profile.state = state_name[:100]
-        profile.postal_code = postal_code[:20]
-        profile.save()
+                # Server-side 18+ check (the client checks too, but never trust it).
+                today = timezone.now().date()
+                age = today.year - date_of_birth.year - (
+                    (today.month, today.day) < (date_of_birth.month, date_of_birth.day)
+                )
+                if age < 18:
+                    return _err(
+                        'You must be at least 18 years old to verify.',
+                        status.HTTP_400_BAD_REQUEST,
+                        'underage',
+                    )
+            profile.date_of_birth = date_of_birth
+            changed.append('date_of_birth')
+
+        # 2. Document type and number (step 2).
+        #
+        # An empty value never overwrites a stored one: a client that sends
+        # ``docNumber: ""`` must not be able to erase a number that was saved
+        # earlier, and an upload must not clear it either.
+        if 'docType' in data:
+            doc_type = str(data.get('docType') or '').strip().lower()
+            if doc_type and doc_type not in VALID_DOC_TYPES:
+                return _err(
+                    'Unknown document type.',
+                    status.HTTP_400_BAD_REQUEST,
+                    'invalid_doc_type',
+                )
+            if doc_type:
+                profile.doc_type = doc_type[:30]
+                changed.append('doc_type')
+
+        if 'docNumber' in data:
+            doc_number = str(data.get('docNumber') or '').strip()
+            if doc_number:
+                profile.doc_number_encrypted = encrypt_value(doc_number)
+                changed.append('doc_number_encrypted')
+
+        if changed:
+            # `updated_at` is auto_now, so it has to be listed explicitly when
+            # a partial save is used.
+            profile.save(update_fields=[*changed, 'updated_at'])
         return Response(serialize_profile(profile))
     except KYCStorageUnavailable:
         logger.exception('Save KYC details failed for user %s', getattr(request.user, 'pk', None))
@@ -163,23 +290,39 @@ def upload_document(request):
 def _upload_document(request):
     profile = get_or_create_profile(request.user)
     if profile.status == 'pending':
-        return _err('Your documents are under review and cannot be changed.', status.HTTP_409_CONFLICT)
+        return _err(
+            'Your documents are under review and cannot be changed.',
+            status.HTTP_409_CONFLICT,
+            'submission_locked',
+        )
     if profile.status == 'verified':
-        return _err('Your identity is already verified.', status.HTTP_409_CONFLICT)
+        return _err(
+            'Your identity is already verified.',
+            status.HTTP_409_CONFLICT,
+            'already_verified',
+        )
 
     kind = str(request.data.get('kind') or '').strip()
     if kind not in VALID_KINDS:
-        return _err('kind must be one of: id_front, id_back, selfie.')
+        return _err(
+            'kind must be one of: id_front, id_back, selfie.',
+            status.HTTP_400_BAD_REQUEST,
+            'invalid_kind',
+        )
 
     uploaded = request.FILES.get('file')
     try:
         content_type = sniff_content_type(uploaded)
     except FileValidationError as exc:
-        return _err(str(exc))
+        return _err(str(exc), status.HTTP_400_BAD_REQUEST, 'invalid_file')
 
     doc_type = str(request.data.get('doc_type') or '').strip().lower()
     if doc_type and doc_type not in VALID_DOC_TYPES:
-        return _err('Unknown doc_type.')
+        return _err(
+            'Unknown doc_type.',
+            status.HTTP_400_BAD_REQUEST,
+            'invalid_doc_type',
+        )
 
     # Replace any existing document in this slot (same profile+kind).
     profile.documents.filter(kind=kind).delete()
@@ -191,15 +334,11 @@ def _upload_document(request):
     )
 
     # The doc number rides along with the first upload and is stored encrypted
-    # on the profile; it is never echoed back in full.
+    # on the profile; it is never echoed back in full. An upload never
+    # clears a number that was saved in the previous step -- an empty value
+    # never overwrites a stored one.
     doc_number = str(request.data.get('doc_number') or '').strip()
-    if doc_number:
-        profile.doc_number_encrypted = encrypt_value(doc_number)
-        profile.doc_type = doc_type or profile.doc_type
-        profile.save(update_fields=['doc_number_encrypted', 'doc_type'])
-    elif doc_type:
-        profile.doc_type = doc_type
-        profile.save(update_fields=['doc_type'])
+    apply_document_fields(profile, doc_type=doc_type, doc_number=doc_number)
 
     logger.info(
         'KYC document uploaded: user=%s kind=%s doc=%s',
@@ -216,7 +355,11 @@ def delete_document(request, document_id):
     try:
         profile = get_or_create_profile(request.user)
         if profile.status in {'pending', 'verified'}:
-            return _err('This submission cannot be changed right now.', status.HTTP_409_CONFLICT)
+            return _err(
+                'This submission cannot be changed right now.',
+                status.HTTP_409_CONFLICT,
+                'submission_locked',
+            )
         deleted, _ = profile.documents.filter(id=document_id).delete()
         if not deleted:
             raise Http404
@@ -250,45 +393,35 @@ def _submit(request):
     profile = get_or_create_profile(request.user)
 
     if profile.status == 'pending':
-        return _err('Your documents are already under review.', status.HTTP_409_CONFLICT)
+        return _err(
+            'Your documents are already under review.',
+            status.HTTP_409_CONFLICT,
+            'submission_locked',
+        )
     if profile.status == 'verified':
-        return _err('Your identity is already verified.', status.HTTP_409_CONFLICT)
+        return _err(
+            'Your identity is already verified.',
+            status.HTTP_409_CONFLICT,
+            'already_verified',
+        )
 
     ok, reason = can_submit(profile)
     if not ok:
-        return _err(reason, status.HTTP_429_TOO_MANY_REQUESTS)
+        return _err(reason, status.HTTP_429_TOO_MANY_REQUESTS, 'rate_limited')
 
-    # 1. Personal details complete.
-    missing = [
-        label
-        for field, label in (
-            ('full_name', 'full name'),
-            ('date_of_birth', 'date of birth'),
-            ('country', 'country'),
-            ('phone', 'phone number'),
-            ('address_line', 'address'),
-            ('city', 'city'),
-            ('state', 'state'),
-            ('postal_code', 'postal code'),
-        )
-        if not getattr(profile, field)
-    ]
+    # Everything that is still missing, reported in one go. The keys are
+    # machine-readable so the frontend can send the user straight to the
+    # step that needs fixing instead of making them hunt for it.
+    missing = _missing_items(profile)
     if missing:
-        return _err(f'Please complete your personal details first: {", ".join(missing)}.')
-
-    # 2. A document type and number.
-    if not profile.doc_type:
-        return _err('Please choose an identity document type first.')
-    if not profile.doc_number_encrypted:
-        return _err('Please enter your document number first.')
-
-    # 3. Files: selfie always; ID front/back except for number-only types.
-    kinds = set(profile.documents.values_list('kind', flat=True))
-    number_only = profile.doc_type in {'nin', 'bvn'}
-    if 'selfie' not in kinds:
-        return _err('Please upload a selfie holding your document.')
-    if not number_only and 'id_front' not in kinds:
-        return _err('Please upload the front of your identity document.')
+        return Response(
+            {
+                'detail': 'Some information is missing',
+                'code': 'kyc_incomplete',
+                'missing': missing,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     submit_for_review(profile)
     return Response(serialize_profile(profile))

@@ -13,5 +13,9 @@ env/
 db.sqlite3
 staticfiles/
 
+# KYC uploads. These are private identity documents and must never end up in
+# the repository (nor be served by the public media handlers).
+private_media/
+
 # Logs
 *.log

@@ -284,7 +284,28 @@ The service is defined by `render.yaml`. Three things matter:
    cleanly. Run `python manage.py makemigrations --check --dry-run` locally
    for the same verdict with a database attached.
 
-2. **Health checks catch a bad deploy.** `healthCheckPath: /api/health` — the
+   `build.sh` also refuses to build when `KYC_ENCRYPTION_KEY` is missing in a
+   production configuration. Failing the *build* rather than the deploy keeps
+   the currently running release serving traffic, so a missing secret can
+   never take the site down.
+
+3. **`KYC_ENCRYPTION_KEY` is mandatory in production.** Document numbers (NIN,
+   BVN, ID numbers) are encrypted at rest with a Fernet key. The key comes
+   from that environment variable and nothing else — in production the app
+   refuses to start without it (`ImproperlyConfigured`), because the only
+   alternative is deriving it from `SECRET_KEY`, which would make every
+   stored number undecryptable the moment `SECRET_KEY` is rotated.
+
+   ```bash
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+
+   Add the result to the service environment (*Dashboard → Environment*) and
+   redeploy. `GET /api/health` reports the state as `"encryption":
+   "configured"` (or `"derived"` in development) so it can be checked without
+   reading the key.
+
+4. **Health checks catch a bad deploy.** `healthCheckPath: /api/health` — the
    endpoint returns `200` only when the database is reachable *and* there are no
    unapplied migrations, otherwise `503` with the pending migration names. A
    schema-behind release is then held back instead of routing users into 500s.
@@ -308,7 +329,7 @@ traceback, never the HTML debug page.
 
 ```bash
 curl -s https://<service>/api/health
-# {"status":"ok","database":"ok","migrations":"ok","unapplied_migrations":[]}
+# {"status":"ok","database":"ok","migrations":"ok","unapplied_migrations":[],"encryption":"configured"}
 ```
 
 It is public and returns only booleans plus any pending migration names — never
