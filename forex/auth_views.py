@@ -89,6 +89,15 @@ def login(request):
 
     user = User.objects.filter(email=email).first()
     if not user or not user.check_password(password):
+        # Repeated failures for one account can mean credential stuffing. Only
+        # the numeric user id is sent -- never the email or the password.
+        if user is not None:
+            try:
+                from monitoring.alerts import notify_login_failure
+
+                notify_login_failure(user.pk)
+            except Exception:  # noqa: BLE001 - alerting must never fail a login
+                pass
         return Response(
             {'message': 'Invalid email or password.'},
             status=status.HTTP_400_BAD_REQUEST,

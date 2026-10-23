@@ -148,6 +148,16 @@ def migrate_on_startup() -> None:
         ', '.join(pending),
     )
 
+    # A schema that is behind the code is the failure mode that caused the
+    # "kyc_kycprofile does not exist" outage. Tell a human even if the migrate
+    # below succeeds, and never let alerting block the boot.
+    try:
+        from monitoring.alerts import notify_pending_migrations
+
+        notify_pending_migrations(pending)
+    except Exception:  # noqa: BLE001 - alerting is best-effort
+        pass
+
     try:
         call_command('migrate', interactive=False, verbosity=1)
     except Exception:  # noqa: BLE001 - never block startup

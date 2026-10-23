@@ -149,6 +149,7 @@ INSTALLED_APPS = [
     'market',
     'trading',
     'kyc',
+    'monitoring',
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
@@ -165,6 +166,9 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # Exposes the active request to the Discord log handler so a
+    # logger.exception() anywhere in a view can include method/path/user id.
+    'monitoring.middleware.CurrentRequestMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -194,6 +198,9 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': os.getenv('THROTTLE_ANON', '60/hour'),
         'user': os.getenv('THROTTLE_USER', '600/hour'),
+        # Unauthenticated frontend error intake: strict by design. The
+        # endpoint is public, so it must never become a spam vector.
+        'monitoring_client': os.getenv('THROTTLE_MONITORING_CLIENT', '10/min'),
     },
 }
 
@@ -281,9 +288,15 @@ LOGGING = {
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
         },
+        # Forwards ERROR+ records to Discord from a background daemon thread.
+        # When DISCORD_WEBHOOK_URL is missing/invalid the handler is a no-op.
+        'discord': {
+            'class': 'monitoring.handlers.DiscordLogHandler',
+            'level': 'ERROR',
+        },
     },
     'root': {
-        'handlers': ['console'],
+        'handlers': ['console', 'discord'],
         'level': LOG_LEVEL,
     },
     'loggers': {
@@ -295,7 +308,7 @@ LOGGING = {
         # Django's own request-error logger; DEBUG=False here so a 500 logs a
         # plain traceback to stdout instead of the HTML debug page.
         'django.request': {
-            'handlers': ['console'],
+            'handlers': ['console', 'discord'],
             'level': 'ERROR',
             'propagate': False,
         },

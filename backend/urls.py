@@ -29,6 +29,7 @@ urlpatterns = [
     path('api/market/', include('market.urls')),
     path('api/trading/', include('trading.urls')),
     path('api/kyc/', include('kyc.urls')),
+    path('api/monitoring/', include('monitoring.urls')),
 ]
 
 if settings.DEBUG:

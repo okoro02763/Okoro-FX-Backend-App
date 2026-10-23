@@ -118,6 +118,21 @@ class TermiiEmailBackend(BaseEmailBackend):
             response.raise_for_status()
             data = response.json()
         except (requests.RequestException, ValueError) as exc:
+            # An out-of-credit Termii account answers 402. That is an operator
+            # problem nobody notices until users stop receiving mail, so it is
+            # worth an alert -- the recipient address is never part of it.
+            status_code = getattr(getattr(exc, 'response', None), 'status_code', None)
+            if status_code == 402:
+                try:
+                    from monitoring.alerts import notify_third_party_failure
+
+                    notify_third_party_failure(
+                        'Termii email',
+                        'HTTP 402 Payment Required',
+                        status_code=402,
+                    )
+                except Exception:  # noqa: BLE001 - alerting is best-effort
+                    pass
             if self.fail_silently:
                 # One warning per failed delivery attempt; never raise into the
                 # (fire-and-forget) caller, and never log recipient secrets.

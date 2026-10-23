@@ -65,3 +65,13 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
+      # Discord alerting. Leave sync:false so the webhook is entered in the
+      # dashboard and never committed to the repository.
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: DISCORD_ACTIVITY_WEBHOOK_URL
+        sync: false
+      - key: DISCORD_ALERTS_ENABLED
+        value: "true"
+      - key: APP_ENV
+        value: "production"
