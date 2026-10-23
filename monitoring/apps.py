@@ -84,6 +84,13 @@ class MonitoringConfig(AppConfig):
 
         _connect_celery_signals()
 
+        # Connect the Django admin login signal (dispatch_uid prevents
+        # duplicate handlers when ready() runs more than once in tests).
+        try:
+            from . import signals  # noqa: F401
+        except Exception:  # noqa: BLE001
+            pass
+
         serving = is_serving_process()
         if not config.alerts_enabled():
             if serving and not getattr(self, '_warned_missing_webhook', False):

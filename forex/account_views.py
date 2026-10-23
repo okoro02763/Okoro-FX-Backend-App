@@ -251,6 +251,28 @@ def submit_kyc(request):
         status='pending',
     )
 
+    try:
+        from monitoring.activity import send_activity_on_commit
+
+        user_id = request.user.pk
+        prior_rejections = request.user.identity_verifications.filter(status='rejected').count()
+        if prior_rejections >= 3:
+            send_activity_on_commit(
+                f'KYC resubmitted after 3+ rejections | user_id: {user_id} | prior_rejections: {prior_rejections}',
+                level='warning',
+                user_id=user_id,
+                dedupe_key=f'kyc-resubmit-3:{user_id}',
+                cooldown_seconds=3600,
+            )
+        else:
+            send_activity_on_commit(
+                f'KYC submitted, waiting for approval | user_id: {user_id}',
+                level='info',
+                user_id=user_id,
+            )
+    except Exception:  # noqa: BLE001 - alerting must never fail a submission
+        pass
+
     return Response(
         {'message': 'Document submitted for verification.', 'kyc': _kyc_serialize(verification)},
         status=status.HTTP_201_CREATED,
@@ -338,6 +360,22 @@ def live_fund(request):
         status='pending',
     )
 
+    try:
+        from monitoring.activity import is_large_deposit, send_activity_on_commit
+
+        large = is_large_deposit(amount_decimal)
+        title = 'Large deposit request' if large else 'Deposit request created'
+        send_activity_on_commit(
+            f'{title} | user_id: {request.user.pk} | amount: {amount_decimal} | currency: NGN',
+            level='warning' if large else 'info',
+            user_id=request.user.pk,
+            dedupe_key=f'deposit-request:{reference}',
+            cooldown_seconds=3600,
+            fields={'amount': amount_decimal, 'currency': 'NGN'},
+        )
+    except Exception:  # noqa: BLE001 - alerting must never fail funding
+        pass
+
     return Response(
         {
             'authorizationUrl': data['data']['authorization_url'],
@@ -397,6 +435,18 @@ def paystack_webhook(request):
     if payment is None:
         # A reference we never issued, or one whose row was rolled back.
         logger.warning('Rejected webhook for unknown reference %s', reference)
+        try:
+            from monitoring.activity import send_activity
+
+            send_activity(
+                'Payment webhook did not match an order | status: unmatched',
+                level='warning',
+                dedupe_key=f'unmatched-payment:{str(reference)[-8:]}',
+                cooldown_seconds=3600,
+                fields={'status': 'unmatched'},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return Response({'message': 'Unknown reference'}, status=status.HTTP_400_BAD_REQUEST)
 
     if payment.status == 'success':
@@ -421,6 +471,18 @@ def paystack_webhook(request):
 
     if not verified.get('status') or not verified.get('data', {}).get('status') == 'success':
         Payment.objects.filter(pk=payment.pk).update(status='failed')
+        try:
+            from monitoring.activity import send_activity
+
+            send_activity(
+                'Deposit failed | status: failed',
+                level='warning',
+                dedupe_key=f'deposit-failed:{str(reference)[-8:]}',
+                cooldown_seconds=3600,
+                fields={'status': 'failed'},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return Response({'message': 'Payment not successful'}, status=status.HTTP_400_BAD_REQUEST)
 
     # The provider reports kobo; Payment stores naira. Confirm the amount matches
@@ -432,6 +494,18 @@ def paystack_webhook(request):
             'Amount mismatch for %s: paystack=%s expected=%s',
             reference, verified_kobo, expected_kobo,
         )
+        try:
+            from monitoring.activity import send_activity
+
+            send_activity(
+                'Deposit amount mismatch | status: mismatch',
+                level='warning',
+                dedupe_key=f'deposit-mismatch:{str(reference)[-8:]}',
+                cooldown_seconds=3600,
+                fields={'status': 'mismatch'},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return Response(
             {'message': 'Amount mismatch'}, status=status.HTTP_400_BAD_REQUEST
         )
@@ -447,6 +521,20 @@ def paystack_webhook(request):
         profile, _ = Profile.objects.select_for_update().get_or_create(user_id=locked.user_id)
         profile.available_balance = Decimal(profile.available_balance) + locked.credit_amount
         profile.save(update_fields=['available_balance'])
+        if Decimal(profile.available_balance) < 0:
+            try:
+                from monitoring.activity import send_activity_on_commit
+
+                send_activity_on_commit(
+                    f'Wallet balance went negative | user_id: {locked.user_id} | balance: {profile.available_balance}',
+                    level='warning',
+                    user_id=locked.user_id,
+                    dedupe_key=f'negative-balance:{locked.user_id}',
+                    cooldown_seconds=3600,
+                    fields={'balance': profile.available_balance},
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
         locked.status = 'success'
         locked.verified_at = timezone.now()
@@ -569,6 +657,30 @@ def create_withdrawal(request):
             status='pending',
         )
         remaining = profile.available_balance
+        try:
+            from monitoring.activity import is_large_withdrawal, send_activity_on_commit
+
+            large = is_large_withdrawal(amount)
+            title = 'Large withdrawal request' if large else 'Withdrawal request created'
+            send_activity_on_commit(
+                f'{title} | user_id: {request.user.pk} | amount: {amount} | currency: NGN',
+                level='warning' if large else 'info',
+                user_id=request.user.pk,
+                dedupe_key=f'withdrawal-request:{withdrawal.pk}',
+                cooldown_seconds=3600,
+                fields={'amount': amount, 'currency': 'NGN'},
+            )
+            if Decimal(profile.available_balance) < 0:
+                send_activity_on_commit(
+                    f'Wallet balance went negative | user_id: {request.user.pk} | balance: {profile.available_balance}',
+                    level='warning',
+                    user_id=request.user.pk,
+                    dedupe_key=f'negative-balance:{request.user.pk}',
+                    cooldown_seconds=3600,
+                    fields={'balance': profile.available_balance},
+                )
+        except Exception:  # noqa: BLE001 - alerting must never fail a withdrawal
+            pass
 
     return Response(
         {

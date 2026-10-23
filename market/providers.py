@@ -590,23 +590,9 @@ class RoutedProvider:
                 return result
         if last_exc is not None:
             # Every upstream in the chain failed; the caller is about to fall
-            # back to the simulated feed. That degradation is invisible in the
-            # UI, so tell a human. Provider names only -- never an API key or a
-            # raw upstream response.
-            try:
-                from monitoring.alerts import notify_third_party_failure
-
-                names = ', '.join(
-                    str(getattr(provider, 'name', provider.__class__.__name__))
-                    for provider in chain
-                )
-                notify_third_party_failure(
-                    f'Market data ({method})',
-                    f'All providers failed ({names}); last error was '
-                    f'{type(last_exc).__name__}.',
-                )
-            except Exception:  # noqa: BLE001 - alerting is best-effort
-                pass
+            # back to the simulated feed. The per-symbol fallback warning is
+            # emitted once by market.services (not here), so this failure does
+            # not produce two alerts for the same degradation.
             raise last_exc
         return None
 

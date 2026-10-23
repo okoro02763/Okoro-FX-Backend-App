@@ -19,6 +19,7 @@ from .models import AuditLog, Invite, PasswordResetToken, Profile
 from .referral import ensure_referral_code, get_referrer_profile, process_referral
 
 import logging
+from django.core.cache import cache
 
 logger = logging.getLogger('forex.auth')
 
@@ -198,6 +199,38 @@ def signup(request):
         },
         defer=True,
     )
+
+    try:
+        from monitoring.activity import send_activity_on_commit, _hash_ip
+
+        ip = (
+            (request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')[0].strip()
+            or request.META.get('REMOTE_ADDR', '')
+        )
+        ip_h = _hash_ip(ip)
+        send_activity_on_commit(
+            f'New user signed up | user_id: {user.pk}',
+            level='info',
+            user_id=user.pk,
+        )
+        if ip_h:
+            key = f'signup_ip:{ip_h}'
+            try:
+                cnt = cache.get(key) or 0
+                cnt = int(cnt) + 1
+                cache.set(key, cnt, 3600)
+                if cnt >= 5:
+                    send_activity_on_commit(
+                        f'Many signups from same IP | ip_hash: {ip_h} | count: {cnt} in 1h',
+                        level='warning',
+                        dedupe_key=f'signup-ip-hash:{ip_h}',
+                        cooldown_seconds=3600,
+                        fields={'ip_hash': ip_h, 'count': cnt},
+                    )
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     return Response(
         {'token': token.key, 'user': serialize_user(user)},

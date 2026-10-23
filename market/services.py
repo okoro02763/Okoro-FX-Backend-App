@@ -45,6 +45,25 @@ def _simulated_candles(
     )
 
 
+def _notify_price_fallback(symbol: str, provider: str, interval: str = '') -> None:
+    """Tell a human once per symbol per 30 minutes that we served simulated prices."""
+    try:
+        from monitoring.activity import send_activity
+
+        detail = f'provider: {provider}'
+        if interval:
+            detail += f' | interval: {interval}'
+        send_activity(
+            f'Price feed fallback to simulated prices | symbol: {symbol} | {detail}',
+            level='warning',
+            dedupe_key=f'price-fallback:{symbol}',
+            cooldown_seconds=1800,
+            fields={'symbol': symbol, 'provider': provider, **({'interval': interval} if interval else {})},
+        )
+    except Exception:  # noqa: BLE001 - alerting must never affect market data
+        pass
+
+
 def get_quote(symbol: str) -> Optional[Dict[str, Any]]:
     """Latest price for an instrument, or ``None`` if it is not tradable."""
     instrument = get_instrument(symbol)
@@ -69,7 +88,10 @@ def get_quote(symbol: str) -> Optional[Dict[str, Any]]:
                 exc,
             )
             quote = _simulated_quote(instrument)
+            _notify_price_fallback(symbol, str(getattr(provider, 'name', 'upstream')))
     else:
+        # Simulated mode is a supported demo configuration, not a degraded
+        # upstream feed; only warn when an upstream was expected and failed.
         quote = _simulated_quote(instrument)
 
     quote.setdefault('name', instrument.name)
@@ -101,7 +123,9 @@ def get_candles(
 
     provider = get_provider(symbol)
     candles: Optional[List[Dict[str, Any]]] = None
+    fallback_provider: Optional[str] = None
     if getattr(provider, 'is_upstream', False):
+        fallback_provider = str(getattr(provider, 'name', 'upstream'))
         try:
             candles = provider.candles(symbol, interval, outputsize, end_time=end_time)
         except Exception as exc:
@@ -115,6 +139,8 @@ def get_candles(
 
     if not candles:
         candles = _simulated_candles(instrument, interval, outputsize, end_time=end_time)
+        if fallback_provider:
+            _notify_price_fallback(symbol, fallback_provider, interval)
 
     cache.set(cache_key, candles, 30 if interval in ('1h', '4h', '1d') else 5)
     return candles

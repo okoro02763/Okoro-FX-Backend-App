@@ -34,6 +34,7 @@ LEVEL_COLORS = {
     'error': 0xE74C3C,    # red
     'warning': 0xE67E22,  # orange
     'info': 0x3498DB,     # blue
+    'success': 0x2ECC71,  # green
 }
 VALID_LEVELS = frozenset(LEVEL_COLORS)
 
@@ -200,13 +201,14 @@ def reset_state() -> None:
         _last_throttle_message = None
 
 
-def _reserve(fingerprint: Optional[str], now: float) -> tuple[str, int, int]:
+def _reserve(fingerprint: Optional[str], now: float, dedupe_window_seconds: Optional[int] = None) -> tuple[str, int, int]:
     """Decide what to do with one alert.
 
     Returns ``(action, suppressed_count, dropped_count)`` where action is
     ``send``, ``suppress`` or ``throttle``.
     """
     global _throttled_since_message, _last_throttle_message
+    window = dedupe_window_seconds if dedupe_window_seconds is not None else DEDUPE_WINDOW_SECONDS
 
     with _lock:
         while _global_times and now - _global_times[0] >= GLOBAL_WINDOW_SECONDS:
@@ -215,7 +217,7 @@ def _reserve(fingerprint: Optional[str], now: float) -> tuple[str, int, int]:
         suppressed = 0
         if fingerprint:
             state = _dedupe.get(fingerprint)
-            if state and now - state['last_sent'] < DEDUPE_WINDOW_SECONDS:
+            if state and now - state['last_sent'] < window:
                 state['suppressed'] += 1
                 return 'suppress', 0, 0
             if state:
@@ -306,7 +308,7 @@ _worker_started = False
 
 
 def _webhook_for(level: str) -> str:
-    if level in {'info', 'warning'}:
+    if level in {'info', 'warning', 'success'}:
         return config.activity_webhook_url() or config.webhook_url()
     return config.webhook_url()
 
@@ -365,6 +367,7 @@ def send_discord_alert(
     description: str = '',
     fingerprint: Optional[str] = None,
     async_send: bool = True,
+    dedupe_window_seconds: Optional[int] = None,
 ) -> bool:
     """Queue (or synchronously send) one alert.
 
@@ -380,7 +383,7 @@ def send_discord_alert(
         if level not in VALID_LEVELS:
             level = 'error'
 
-        action, suppressed, dropped = _reserve(fingerprint, _now())
+        action, suppressed, dropped = _reserve(fingerprint, _now(), dedupe_window_seconds)
         if action == 'suppress':
             return False
 

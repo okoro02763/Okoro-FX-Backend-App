@@ -33,6 +33,26 @@ from django.core.mail.backends.base import BaseEmailBackend
 logger = logging.getLogger(__name__)
 
 
+def _notify_email_failure(status) -> None:
+    """Send one best-effort warning per hour when the email provider fails.
+
+    No recipient address, message body, subject or provider response body is
+    included -- only the provider name and a coarse status.
+    """
+    try:
+        from monitoring.activity import send_activity
+
+        send_activity(
+            f'Email provider failure | provider: termii | status: {status}',
+            level='warning',
+            dedupe_key='email-provider-failed',
+            cooldown_seconds=3600,
+            fields={'provider': 'termii', 'status': status},
+        )
+    except Exception:  # noqa: BLE001 - alerting is best-effort
+        pass
+
+
 class TermiiEmailError(Exception):
     """Raised when the Termii API rejects or fails to deliver an email."""
 
@@ -118,21 +138,11 @@ class TermiiEmailBackend(BaseEmailBackend):
             response.raise_for_status()
             data = response.json()
         except (requests.RequestException, ValueError) as exc:
-            # An out-of-credit Termii account answers 402. That is an operator
-            # problem nobody notices until users stop receiving mail, so it is
-            # worth an alert -- the recipient address is never part of it.
+            # A dead, slow or out-of-credit provider silently stops all mail, so
+            # it is worth one warning per hour. The recipient address and the
+            # provider response body are never included.
             status_code = getattr(getattr(exc, 'response', None), 'status_code', None)
-            if status_code == 402:
-                try:
-                    from monitoring.alerts import notify_third_party_failure
-
-                    notify_third_party_failure(
-                        'Termii email',
-                        'HTTP 402 Payment Required',
-                        status_code=402,
-                    )
-                except Exception:  # noqa: BLE001 - alerting is best-effort
-                    pass
+            _notify_email_failure(status_code or 'unavailable')
             if self.fail_silently:
                 # One warning per failed delivery attempt; never raise into the
                 # (fire-and-forget) caller, and never log recipient secrets.
@@ -143,6 +153,7 @@ class TermiiEmailBackend(BaseEmailBackend):
             ) from exc
 
         if str(data.get('code', '')).lower() != 'ok':
+            _notify_email_failure('rejected')
             detail = data.get('message') or data
             if self.fail_silently:
                 logger.warning(

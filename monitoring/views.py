@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import hmac
+import io
+import logging
+import os
 from typing import Any
 
+from django.core.management import call_command
 from rest_framework import status
 from rest_framework.decorators import (
     api_view,
@@ -18,6 +23,8 @@ from rest_framework.throttling import SimpleRateThrottle
 from . import config
 from .alerts import notify_frontend_error
 from .discord import send_test_alert
+
+logger = logging.getLogger(__name__)
 
 
 class ClientErrorThrottle(SimpleRateThrottle):
@@ -123,3 +130,52 @@ def client_error(request):
         app_version=_text(data, 'appVersion', 60),
     )
     return Response({'status': 'accepted'}, status=status.HTTP_202_ACCEPTED)
+
+
+def _cron_authorised(request) -> bool:
+    """Constant-time check of ``X-Cron-Secret`` against ``CRON_SECRET``.
+
+    A missing server secret disables the endpoint entirely (404) rather than
+    accepting an empty header. The response never reveals which check failed.
+    """
+    secret = (os.getenv('CRON_SECRET') or '').strip()
+    if not secret:
+        return False
+    supplied = (request.headers.get('X-Cron-Secret') or '').strip()
+    return hmac.compare_digest(supplied, secret)
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def run_checks(request):
+    """POST /api/monitoring/run-checks/ -- secret-header scheduled checks.
+
+    ``?task=check_pending_alerts`` (default) or ``?task=daily_summary``.
+    The daily summary is only available when ``ENABLE_DAILY_SUMMARY`` is true.
+    Missing or wrong secret, and a disabled task, all return 404 so the
+    endpoint is indistinguishable from a non-existent route.
+    """
+    if not _cron_authorised(request):
+        return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    task = (request.query_params.get('task') or 'check_pending_alerts').strip().lower()
+    if task in {'check_pending_alerts', 'pending', ''}:
+        command = 'check_pending_alerts'
+    elif task == 'daily_summary':
+        enabled = (os.getenv('ENABLE_DAILY_SUMMARY') or '').strip().lower()
+        if enabled not in {'true', '1', 'yes', 'on'}:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        command = 'daily_summary'
+    else:
+        return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        call_command(command, stdout=io.StringIO(), verbosity=0)
+    except Exception:  # noqa: BLE001 - a scheduler call must never 500 loudly
+        logger.exception('Scheduled monitoring command %s failed', command)
+        return Response(
+            {'detail': 'Check failed.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    return Response({'status': 'ok', 'task': command})

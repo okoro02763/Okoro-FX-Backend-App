@@ -222,7 +222,22 @@ def place_trade(request):
             stop_loss=stop_loss,
             take_profit=take_profit,
         )
-        
+        try:
+            from monitoring.activity import is_large_trade, send_activity_on_commit
+
+            notional = Decimal(str(entry_price)) * Decimal(str(quantity))
+            if is_large_trade(notional):
+                send_activity_on_commit(
+                    f'Large single trade | user_id: {request.user.pk} | symbol: {symbol} | stake: {notional} | direction: {trade_type}',
+                    level='warning',
+                    user_id=request.user.pk,
+                    dedupe_key=f'large-spot-trade:{trade.pk}',
+                    cooldown_seconds=3600,
+                    fields={'symbol': symbol, 'stake': notional, 'direction': trade_type},
+                )
+        except Exception:  # noqa: BLE001 - alerting must never fail a trade
+            pass
+
         # Place order through Deriv API
         if deriv_client.is_connected:
             result = deriv_client.place_trade_order(

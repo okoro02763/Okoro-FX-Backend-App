@@ -285,6 +285,19 @@ def review_kyc(request, verification_id):
         {'doc_type': verification.doc_type, 'doc_number': verification.doc_number},
     )
 
+    try:
+        from monitoring.activity import send_activity_on_commit
+
+        status_name = 'verified' if new_status == 'approved' else 'rejected'
+        send_activity_on_commit(
+            f'KYC {status_name} | user_id: {verification.user_id} | status: {status_name} | reason_category: manual_review',
+            level='success' if new_status == 'approved' else 'warning',
+            user_id=verification.user_id,
+            fields={'status': status_name, 'reason_category': 'manual_review'},
+        )
+    except Exception:  # noqa: BLE001 - alerting must never fail a review
+        pass
+
     return Response(_kyc_serialize(verification))
 
 
@@ -383,6 +396,20 @@ def review_withdrawal(request, withdrawal_id):
                 Decimal(profile.available_balance) + Decimal(withdrawal.amount)
             )
             profile.save(update_fields=['available_balance'])
+            if Decimal(profile.available_balance) < 0:
+                try:
+                    from monitoring.activity import send_activity_on_commit
+
+                    send_activity_on_commit(
+                        f'Wallet balance went negative | user_id: {withdrawal.user_id} | balance: {profile.available_balance}',
+                        level='warning',
+                        user_id=withdrawal.user_id,
+                        dedupe_key=f'negative-balance:{withdrawal.user_id}',
+                        cooldown_seconds=3600,
+                        fields={'balance': profile.available_balance},
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
         withdrawal.status = new_status
         withdrawal.review_note = note

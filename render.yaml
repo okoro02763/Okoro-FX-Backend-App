@@ -75,3 +75,15 @@ services:
         value: "true"
       - key: APP_ENV
         value: "production"
+      - key: ALERT_LARGE_DEPOSIT
+        value: "500"
+      - key: ALERT_LARGE_WITHDRAWAL
+        value: "500"
+      - key: ALERT_LARGE_TRADE
+        value: "1000"
+      - key: ENABLE_DAILY_SUMMARY
+        value: "false"
+      # Shared secret for POST /api/monitoring/run-checks/. Enter it in the
+      # dashboard; never commit it.
+      - key: CRON_SECRET
+        sync: false

@@ -213,6 +213,8 @@ def submit_for_review(profile: KYCProfile) -> None:
 
     Caller is responsible for validating completeness (see the view).
     """
+    resubmit_count_before = profile.resubmit_count
+    was_rejected = profile.status == 'rejected'
     with transaction.atomic():
         profile.status = 'pending'
         profile.submitted_at = timezone.now()
@@ -226,6 +228,31 @@ def submit_for_review(profile: KYCProfile) -> None:
                 'rejection_reason', 'resubmit_count', 'resubmit_window_start',
             ]
         )
+
+    # Emit exactly one activity alert for this submission. A repeated
+    # resubmission is escalated to a warning instead of sending both an info
+    # and a warning for the same action.
+    try:
+        from monitoring.activity import send_activity_on_commit
+
+        user_id = getattr(profile.user, 'pk', None)
+        if was_rejected and resubmit_count_before >= 3:
+            send_activity_on_commit(
+                f'KYC resubmitted after 3+ rejections | user_id: {user_id} | prior_submissions: {resubmit_count_before}',
+                level='warning',
+                user_id=user_id,
+                dedupe_key=f'kyc-resubmit-3:{user_id}',
+                cooldown_seconds=3600,
+            )
+        else:
+            send_activity_on_commit(
+                f'KYC submitted, waiting for approval | user_id: {user_id}',
+                level='info',
+                user_id=user_id,
+            )
+    except Exception:
+        pass
+
     _send(
         'kyc_received',
         'We received your documents',
@@ -254,6 +281,16 @@ def approve_profile(profile: KYCProfile, reviewer=None) -> None:
         profile.user,
         action_url=f'{settings.FRONTEND_URL}/account',
     )
+    try:
+        from monitoring.activity import send_activity_on_commit
+
+        send_activity_on_commit(
+            f'KYC approved | user_id: {getattr(profile.user, "pk", None)}',
+            level='success',
+            user_id=getattr(profile.user, 'pk', None),
+        )
+    except Exception:
+        pass
 
 
 def reject_profile(profile: KYCProfile, reason: str, reviewer=None) -> None:
@@ -276,6 +313,31 @@ def reject_profile(profile: KYCProfile, reason: str, reviewer=None) -> None:
         reason=profile.rejection_reason,
         action_url=f'{settings.FRONTEND_URL}/account/verification',
     )
+    try:
+        from monitoring.activity import send_activity_on_commit
+
+        category = 'other'
+        rlow = (reason or '').lower()
+        if any(token in rlow for token in ('photo', 'selfie', 'blur', 'image', 'glare')):
+            category = 'photo'
+        elif any(
+            token in rlow
+            for token in ('document', 'passport', 'license', 'id card', 'expired', 'doc type')
+        ):
+            category = 'document'
+        elif any(
+            token in rlow
+            for token in ('detail', 'name', 'date of birth', 'dob', 'address', 'mismatch')
+        ):
+            category = 'details'
+        send_activity_on_commit(
+            f'KYC rejected | user_id: {getattr(profile.user, "pk", None)} | reason_category: {category}',
+            level='warning',
+            user_id=getattr(profile.user, 'pk', None),
+            fields={'reason_category': category},
+        )
+    except Exception:
+        pass
 
 
 def serialize_profile(profile: KYCProfile) -> dict:

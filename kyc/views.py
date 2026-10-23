@@ -424,13 +424,8 @@ def _submit(request):
         )
 
     submit_for_review(profile)
-    # Business activity alert: user id only, never document data.
-    try:
-        from monitoring.alerts import notify_kyc_submitted
-
-        notify_kyc_submitted(getattr(request.user, 'pk', None))
-    except Exception:  # noqa: BLE001 - alerting must never fail a submission
-        pass
+    # Activity alert is emitted by kyc.services.submit_for_review (info level,
+    # user id only, never document data) -- do not duplicate it here.
     return Response(serialize_profile(profile))
 
 

@@ -91,23 +91,70 @@ def notify_pending_migrations(pending: Iterable[str]) -> bool:
 # ---------------------------------------------------------------------------
 
 def notify_kyc_submitted(user_id: Any) -> bool:
-    """A customer submitted identity documents. User id only -- no KYC data."""
+    """A customer submitted identity documents (legacy path). User id only.
+
+    The Django-native ``kyc`` app emits its own info-level activity alert from
+    ``kyc.services.submit_for_review``; this helper covers the legacy
+    ``/api/account/kyc`` flow so the two never double-alert.
+    """
     if user_id in (None, ''):
         return False
-    return _safe(
-        lambda: send_discord_alert(
-            title='KYC submission received',
-            fields=[('Event', 'KYC submitted for review'), ('User ID', user_id)],
-            level='warning',
-            fingerprint=f'kyc-submitted:{user_id}',
+    try:
+        from .activity import send_activity
+
+        return send_activity(
+            f'KYC submitted, waiting for approval | user_id: {user_id}',
+            level='info',
+            user_id=user_id,
         )
-    )
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def notify_login_failure(user_id: Any) -> bool:
     """Alert after 5 failed logins for one user inside 10 minutes."""
     if user_id in (None, ''):
         return False
+    try:
+        from django.core.cache import cache
+
+        key = f'login-fail:{user_id}'
+        cnt = cache.get(key) or 0
+        cnt = int(cnt) + 1
+        cache.set(key, cnt, LOGIN_FAILURE_WINDOW_SECONDS)
+        if cnt < LOGIN_FAILURE_THRESHOLD:
+            return False
+        # Alert once per 30 minutes per account
+        alert_key = f'login-fail-alert:{user_id}'
+        if cache.get(alert_key):
+            return False
+        cache.set(alert_key, 1, 1800)
+        try:
+            from .activity import send_activity
+
+            send_activity(
+                f'Repeated failed logins | user_id: {user_id} | failures: {cnt} in 10 min',
+                level='warning',
+                user_id=user_id,
+                fields={'failures': f'{cnt} in 10 min'},
+            )
+            return True
+        except Exception:
+            pass
+        return _safe(
+            lambda: send_discord_alert(
+                title='Repeated login failures',
+                fields=[
+                    ('Event', 'Possible credential stuffing'),
+                    ('User ID', user_id),
+                    ('Failures', f'{cnt} in {LOGIN_FAILURE_WINDOW_SECONDS // 60} minutes'),
+                ],
+                level='warning',
+                fingerprint=f'login-failures:{user_id}',
+            )
+        )
+    except Exception:
+        pass
     key = str(user_id)
     now = time.monotonic()
     with _login_lock:

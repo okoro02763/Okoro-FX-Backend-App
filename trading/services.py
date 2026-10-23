@@ -133,6 +133,29 @@ def open_trade(user, symbol, direction, stake, duration_seconds=None, expiry_tim
             open_price=open_price,
             expiry_time=expiry_time,
         )
+        try:
+            from monitoring.activity import is_large_trade, send_activity_on_commit
+
+            if is_large_trade(stake):
+                send_activity_on_commit(
+                    f'Large single trade | user_id: {user.pk} | symbol: {instrument.symbol} | stake: {stake} | direction: {direction}',
+                    level='warning',
+                    user_id=user.pk,
+                    dedupe_key=f'large-trade:{trade.pk}',
+                    cooldown_seconds=3600,
+                    fields={'symbol': instrument.symbol, 'stake': stake, 'direction': direction},
+                )
+            if Decimal(wallet.demo_balance) < 0:
+                send_activity_on_commit(
+                    f'Wallet balance went negative | user_id: {user.pk} | balance: {wallet.demo_balance}',
+                    level='warning',
+                    user_id=user.pk,
+                    dedupe_key=f'negative-balance:{user.pk}',
+                    cooldown_seconds=3600,
+                    fields={'balance': wallet.demo_balance},
+                )
+        except Exception:  # noqa: BLE001 - alerting must never fail a trade
+            pass
     return trade
 
 
@@ -176,6 +199,20 @@ def settle_trade(trade_pk, close_price=None) -> Optional[Trade]:
             wallet, _ = Wallet.objects.select_for_update().get_or_create(user=trade.user)
             wallet.demo_balance = money(wallet.demo_balance + credit)
             wallet.save(update_fields=['demo_balance', 'updated_at'])
+            if Decimal(wallet.demo_balance) < 0:
+                try:
+                    from monitoring.activity import send_activity_on_commit
+
+                    send_activity_on_commit(
+                        f'Wallet balance went negative | user_id: {trade.user_id} | balance: {wallet.demo_balance}',
+                        level='warning',
+                        user_id=trade.user_id,
+                        dedupe_key=f'negative-balance:{trade.user_id}',
+                        cooldown_seconds=3600,
+                        fields={'balance': wallet.demo_balance},
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
     return trade
 
