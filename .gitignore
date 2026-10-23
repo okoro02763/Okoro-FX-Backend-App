@@ -11,6 +11,7 @@ env/
 
 # Django
 db.sqlite3
+test_*.sqlite3
 staticfiles/
 
 # KYC uploads. These are private identity documents and must never end up in
