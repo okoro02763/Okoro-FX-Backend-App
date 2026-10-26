@@ -165,7 +165,7 @@ def kyc_status(request):
         return _server_error_response()
 
 
-@api_view(['PUT'])
+@api_view(['PUT', 'PATCH'])
 @authentication_classes([BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
 def save_details(request):
@@ -259,6 +259,16 @@ def save_details(request):
             # `updated_at` is auto_now, so it has to be listed explicitly when
             # a partial save is used.
             profile.save(update_fields=[*changed, 'updated_at'])
+
+        # Diagnostic breadcrumb for the "number looks saved but the server
+        # never received it" class of bug. Only key names are logged -- never
+        # a document number, a value, or a secret.
+        logger.info(
+            'KYC details saved: user=%s keys=%s changed=%s',
+            profile.user_id,
+            sorted(str(key) for key in data.keys()),
+            changed,
+        )
         return Response(serialize_profile(profile))
     except KYCStorageUnavailable:
         logger.exception('Save KYC details failed for user %s', getattr(request.user, 'pk', None))
@@ -316,7 +326,9 @@ def _upload_document(request):
     except FileValidationError as exc:
         return _err(str(exc), status.HTTP_400_BAD_REQUEST, 'invalid_file')
 
-    doc_type = str(request.data.get('doc_type') or '').strip().lower()
+    doc_type = str(
+        request.data.get('doc_type') or request.data.get('docType') or ''
+    ).strip().lower()
     if doc_type and doc_type not in VALID_DOC_TYPES:
         return _err(
             'Unknown doc_type.',
@@ -337,12 +349,14 @@ def _upload_document(request):
     # on the profile; it is never echoed back in full. An upload never
     # clears a number that was saved in the previous step -- an empty value
     # never overwrites a stored one.
-    doc_number = str(request.data.get('doc_number') or '').strip()
+    doc_number = str(
+        request.data.get('doc_number') or request.data.get('docNumber') or ''
+    ).strip()
     apply_document_fields(profile, doc_type=doc_type, doc_number=doc_number)
 
     logger.info(
-        'KYC document uploaded: user=%s kind=%s doc=%s',
-        profile.user_id, kind, doc.pk,
+        'KYC document uploaded: user=%s kind=%s doc=%s doc_type=%s number_provided=%s',
+        profile.user_id, kind, doc.pk, doc_type or profile.doc_type, bool(doc_number),
     )
     return Response(serialize_profile(profile), status=status.HTTP_201_CREATED)
 
@@ -361,14 +375,19 @@ def delete_document(request, document_id):
                 'submission_locked',
             )
         deleted, _ = profile.documents.filter(id=document_id).delete()
+        # Idempotent by design: the browser can retry a delete (a double click,
+        # a flaky connection, React re-rendering) and the second request must
+        # not turn into a scary 404. The document is gone either way, which is
+        # exactly what the caller asked for.
         if not deleted:
-            raise Http404
+            logger.info(
+                'KYC delete ignored (already gone): user=%s document=%s',
+                profile.user_id, document_id,
+            )
         return Response(serialize_profile(profile))
     except KYCStorageUnavailable:
         logger.exception('KYC delete failed for user %s', getattr(request.user, 'pk', None))
         return _server_error_response()
-    except Http404:
-        raise
     except Exception:  # noqa: BLE001
         logger.exception('KYC delete failed for user %s', getattr(request.user, 'pk', None))
         return _server_error_response()

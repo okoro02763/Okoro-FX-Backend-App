@@ -346,6 +346,16 @@ def serialize_profile(profile: KYCProfile) -> dict:
     number = _decrypt(profile)
     has_number = bool(profile.doc_number_encrypted)
     last4 = number[-4:] if number else ''
+    documents = [
+        {
+            'id': doc.id,
+            'kind': doc.kind,
+            'docType': doc.doc_type,
+            'uploadedAt': doc.uploaded_at.isoformat(),
+        }
+        for doc in profile.documents.all()
+    ]
+    kinds = {doc['kind'] for doc in documents}
     return {
         'status': profile.status,
         'rejectionReason': profile.rejection_reason or None,
@@ -374,15 +384,12 @@ def serialize_profile(profile: KYCProfile) -> dict:
         # client (and the admin tooling) can read them without guessing.
         'has_document_number': has_number,
         'document_number_last4': last4,
-        'documents': [
-            {
-                'id': doc.id,
-                'kind': doc.kind,
-                'docType': doc.doc_type,
-                'uploadedAt': doc.uploaded_at.isoformat(),
-            }
-            for doc in profile.documents.all()
-        ],
+        # Which upload slots the server actually holds. The review screen can
+        # therefore say "Front ✓" without inferring it from a local File object.
+        'has_id_front': 'id_front' in kinds,
+        'has_id_back': 'id_back' in kinds,
+        'has_selfie': 'selfie' in kinds,
+        'documents': documents,
     }
 
 

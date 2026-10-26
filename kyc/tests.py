@@ -143,3 +143,94 @@ class KYCFullFlowTests(TestCase):
 
         self.user.kyc_profile.refresh_from_db()
         self.assertTrue(self.user.kyc_profile.doc_number_encrypted)
+
+    def test_delete_is_idempotent(self):
+        """The browser can retry a delete; the second call must not 404."""
+        self._complete_personal_details()
+        response = self._upload('selfie')
+        self.assertEqual(response.status_code, 201)
+        document_id = response.json()['documents'][0]['id']
+        url = reverse('kyc-document-delete', kwargs={'document_id': document_id})
+
+        first = self.client.delete(url, **self.auth)
+        self.assertEqual(first.status_code, 200)
+
+        # Exactly the "200 then 404" pair from the production log.
+        second = self.client.delete(url, **self.auth)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()['documents'], [])
+
+    def test_number_survives_delete_and_reupload_of_the_selfie(self):
+        """Replacing a file is not a reason to lose the saved number."""
+        self._complete_personal_details()
+        self.assertEqual(self._save_document('national_id', '89234567890').status_code, 200)
+
+        uploaded = self._upload('selfie')
+        document_id = uploaded.json()['documents'][0]['id']
+        self.assertEqual(
+            self.client.delete(
+                reverse('kyc-document-delete', kwargs={'document_id': document_id}),
+                **self.auth,
+            ).status_code,
+            200,
+        )
+        self.assertEqual(self._upload('selfie').status_code, 201)
+
+        data = self.client.get(reverse('kyc-status'), **self.auth).json()
+        self.assertTrue(data['has_document_number'])
+        self.assertTrue(data['hasDocumentNumber'])
+        self.assertEqual(data['document_number_last4'], '7890')
+
+    def test_step_two_payload_is_accepted_and_returns_canonical_fields(self):
+        """The exact JSON the wizard's step-2 Continue sends must be accepted.
+
+        This is the contract test for the frontend: PUT /kyc/details/ with
+        ``docType`` + ``docNumber`` (camelCase, because that is what the API
+        client sends). It also pins the fields the review screen reads.
+        """
+        self._complete_personal_details()
+
+        response = self.client.put(
+            reverse('kyc-details'),
+            data=json.dumps({
+                'docType': 'passport',
+                'docNumber': 'A1234567',
+            }),
+            content_type='application/json',
+            **self.auth,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['doc_type'], 'passport')
+        self.assertEqual(body['docType'], 'passport')
+        self.assertTrue(body['has_document_number'])
+        self.assertTrue(body['hasDocumentNumber'])
+        self.assertEqual(body['document_number_last4'], '4567')
+        self.assertEqual(body['documentNumberLast4'], '4567')
+        # No files uploaded yet, so every slot is empty.
+        self.assertFalse(body['has_id_front'])
+        self.assertFalse(body['has_id_back'])
+        self.assertFalse(body['has_selfie'])
+
+    def test_upload_of_a_non_number_only_document_can_carry_the_number(self):
+        """A front-image upload is also allowed to save the number.
+
+        The wizard sends the number with every upload as a fallback, so the
+        observed flow (edit number -> replace front image) cannot lose it even
+        if the separate Continue save is interrupted.
+        """
+        self._complete_personal_details()
+
+        response = self._upload('id_front', doc_type='passport', doc_number='A7654321')
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertTrue(body['has_document_number'])
+        self.assertEqual(body['document_number_last4'], '4321')
+        self.assertTrue(body['has_id_front'])
+
+        stored = self.user.kyc_profile
+        stored.refresh_from_db()
+        # The plaintext must never be stored: only a Fernet token.
+        self.assertTrue(stored.doc_number_encrypted)
+        self.assertNotIn('A7654321', stored.doc_number_encrypted)
