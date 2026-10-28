@@ -17,6 +17,7 @@ TA-Lib>=0.4.28
 psycopg2-binary>=2.9
 dj-database-url>=2.1
 # Encrypting KYC document numbers at rest (kyc.crypto). It currently also
-# arrives via daphne -> autobahn, but the kyc app depends on it directly, so
+# arrives via daphne -> autobahn, but the kyc app depends it directly, so
 # it is declared explicitly instead of by accident.
 cryptography>=42.0
+webauthn>=2.0.0

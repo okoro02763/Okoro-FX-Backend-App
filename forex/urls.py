@@ -1,6 +1,6 @@
 from django.urls import re_path
 from . import views
-from . import auth_views, bot_views, strategy_views, admin_views, analytics_views, referral_views, account_views
+from . import auth_views, bot_views, strategy_views, admin_views, analytics_views, referral_views, account_views, passkey_views
 
 
 def api_route(route, view, name):
@@ -52,6 +52,11 @@ urlpatterns = [
     api_route('auth/invite', auth_views.invite_user, name='auth-invite'),
     api_route('auth/accept-invite', auth_views.accept_invite, name='auth-accept-invite'),
     api_route('auth/change-password', auth_views.change_password, name='auth-change-password'),
+    # Passkeys / Biometrics
+    api_route('auth/passkey/register/begin', passkey_views.passkey_register_begin, name='auth-passkey-register-begin'),
+    api_route('auth/passkey/register/finish', passkey_views.passkey_register_finish, name='auth-passkey-register-finish'),
+    api_route('auth/passkey/login/begin', passkey_views.passkey_login_begin, name='auth-passkey-login-begin'),
+    api_route('auth/passkey/login/finish', passkey_views.passkey_login_finish, name='auth-passkey-login-finish'),
 
     # Bot
     api_route('bot/status', bot_views.get_bot_status, name='bot-status'),

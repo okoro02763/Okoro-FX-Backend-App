@@ -125,6 +125,24 @@ DEFAULT_FROM_EMAIL = os.getenv('EMAIL_GENERAL', EMAIL_HOST_USER)
 # auth_views module used to read FRONTEND_URL itself; it is centralised here so
 # the email service and every caller agree on the value.
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+# WebAuthn / Passkeys
+WEBAUTHN_RP_NAME = os.getenv('WEBAUTHN_RP_NAME', 'OKORO FX')
+WEBAUTHN_RP_ID = os.getenv('WEBAUTHN_RP_ID')
+WEBAUTHN_ORIGIN = os.getenv('WEBAUTHN_ORIGIN') or FRONTEND_URL
+WEBAUTHN_EXPECTED_ORIGINS = [
+    o.strip()
+    for o in (os.getenv('WEBAUTHN_EXPECTED_ORIGINS') or '').split(',')
+    if o.strip()
+]
+if not WEBAUTHN_EXPECTED_ORIGINS:
+    WEBAUTHN_EXPECTED_ORIGINS = [WEBAUTHN_ORIGIN]
+if not WEBAUTHN_RP_ID:
+    try:
+        from urllib.parse import urlparse
+
+        WEBAUTHN_RP_ID = urlparse(WEBAUTHN_ORIGIN).hostname or 'localhost'
+    except Exception:
+        WEBAUTHN_RP_ID = 'localhost'
 # Address shown in the support section and footer of rendered email templates.
 DEFAULT_SUPPORT_EMAIL = os.getenv('DEFAULT_SUPPORT_EMAIL', 'support@okorofx.com')
 # Optional hosted copy of the brand logo used in the email header. Only
