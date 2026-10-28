@@ -40,6 +40,10 @@ urlpatterns = [
 
     # Auth
     api_route('auth/login', auth_views.login, name='auth-login'),
+    api_route('auth/verify-device', auth_views.verify_device, name='auth-verify-device'),
+    api_route('auth/resend-verification', auth_views.resend_verification, name='auth-resend-verification'),
+    api_route('auth/devices', auth_views.list_devices, name='auth-devices'),
+    api_route(r'auth/devices/(?P<device_id>[0-9]+)', auth_views.revoke_device, name='auth-revoke-device'),
     api_route('auth/signup', auth_views.signup, name='auth-signup'),
     api_route('auth/validate-referral', auth_views.validate_referral, name='auth-validate-referral'),
     api_route('auth/forgot-password', auth_views.forgot_password, name='auth-forgot-password'),

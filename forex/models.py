@@ -385,3 +385,66 @@ class Payment(models.Model):
 
     def __str__(self):
         return f"{self.reference} ({self.user.email}, {self.status})"
+
+
+class TrustedDevice(models.Model):
+    user = models.ForeignKey(
+        'auth.User', on_delete=models.CASCADE, related_name='trusted_devices'
+    )
+    device_id = models.CharField(max_length=64)
+    label = models.CharField(max_length=255, blank=True, default='')
+    ip_address = models.CharField(max_length=64, blank=True, default='')
+    user_agent = models.TextField(blank=True, default='')
+    last_ip = models.CharField(max_length=64, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+    is_trusted = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = [('user', 'device_id')]
+        ordering = ['-last_seen_at']
+
+    def __str__(self):
+        return f"{self.user.email} - {self.label or self.device_id}"
+
+
+class LoginVerification(models.Model):
+    user = models.ForeignKey(
+        'auth.User', on_delete=models.CASCADE, related_name='login_verifications'
+    )
+    device_id = models.CharField(max_length=64)
+    code_hash = models.CharField(max_length=128)
+    expires_at = models.DateTimeField()
+    attempts = models.IntegerField(default=0)
+    used = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+
+class WebAuthnCredential(models.Model):
+    user = models.ForeignKey(
+        'auth.User', on_delete=models.CASCADE, related_name='webauthn_credentials'
+    )
+    credential_id = models.TextField()
+    public_key = models.TextField()
+    sign_count = models.IntegerField(default=0)
+    device_label = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.email} - {self.device_label}"
+
+
+class SecurityEvent(models.Model):
+    user = models.ForeignKey(
+        'auth.User', on_delete=models.CASCADE, related_name='security_events'
+    )
+    event_type = models.CharField(max_length=60)
+    details = models.JSONField(default=dict, blank=True)
+    ip_address = models.CharField(max_length=64, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']

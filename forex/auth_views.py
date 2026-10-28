@@ -1,5 +1,8 @@
+import json
 import secrets
 import string
+import uuid
+from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -15,11 +18,22 @@ from rest_framework.response import Response
 from .authentication import BearerTokenAuthentication
 from .permissions import IsAdminUser
 from .email_service import send_template_email
-from .models import AuditLog, Invite, PasswordResetToken, Profile
+from .models import (
+    AuditLog,
+    Invite,
+    LoginVerification,
+    PasswordResetToken,
+    Profile,
+    SecurityEvent,
+    TrustedDevice,
+    WebAuthnCredential,
+)
 from .referral import ensure_referral_code, get_referrer_profile, process_referral
 
 import logging
 from django.core.cache import cache
+from django.utils.crypto import get_random_string
+import hashlib
 
 logger = logging.getLogger('forex.auth')
 
@@ -27,6 +41,24 @@ User = get_user_model()
 
 # Base URL of the frontend, used when constructing password-reset links.
 FRONTEND_URL = settings.FRONTEND_URL
+
+try:
+    from webauthn import (
+        generate_authentication_options,
+        generate_registration_options,
+        verify_authentication_response,
+        verify_registration_response,
+    )
+    from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+    from webauthn.helpers.structs import (
+        AuthenticatorSelectionCriteria,
+        PublicKeyCredentialDescriptor,
+        ResidentKeyRequirement,
+        UserVerificationRequirement,
+    )
+    WEBAUTHN_AVAILABLE = True
+except Exception:
+    WEBAUTHN_AVAILABLE = False
 
 
 def _with_profile(user):
@@ -75,69 +107,7 @@ def serialize_user(user):
     }
 
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def login(request):
-    """Sign in with email/password -> { token, user }"""
-    email = (request.data.get('email') or '').strip().lower()
-    password = request.data.get('password') or ''
-
-    if not email or not password:
-        return Response(
-            {'message': 'Email and password are required.'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    user = User.objects.filter(email=email).first()
-    if not user or not user.check_password(password):
-        # Repeated failures for one account can mean credential stuffing. Only
-        # the numeric user id is sent -- never the email or the password.
-        if user is not None:
-            try:
-                from monitoring.alerts import notify_login_failure
-
-                notify_login_failure(user.pk)
-            except Exception:  # noqa: BLE001 - alerting must never fail a login
-                pass
-        return Response(
-            {'message': 'Invalid email or password.'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    profile = _with_profile(user)
-    if profile.status != 'active':
-        return Response(
-            {'message': f'This account is {profile.status}.'},
-            status=status.HTTP_403_FORBIDDEN,
-        )
-
-    token, _ = Token.objects.get_or_create(user=user)
-
-    # Login alert -- fire-and-forget, never blocks the sign-in response.
-    # The provider call used to run inline: a slow (or out-of-credit, i.e. 402)
-    # Termii account turned every login into a slow login. Delivery now happens
-    # on a background thread with a bounded timeout and never breaks the
-    # response.
-    ip_address = (
-        (request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')[0].strip()
-        or request.META.get('REMOTE_ADDR', '')
-    )
-    try:
-        send_template_email(
-            'login_alert',
-            user.email,
-            {
-                'name': user.first_name or 'there',
-                'ip_address': ip_address or 'Unknown',
-                'user_agent': request.META.get('HTTP_USER_AGENT', '') or 'Unknown',
-                'login_time': timezone.localtime(),
-            },
-            background=True,
-        )
-    except Exception:  # noqa: BLE001 - alerts must never fail a login
-        logger.warning('Could not queue login alert email for user %s', user.pk)
-
-    return Response({'token': token.key, 'user': serialize_user(user)})
+# Login replaced below with device verification support
 
 
 @api_view(['POST'])
@@ -493,3 +463,262 @@ def change_password(request):
     )
 
     return Response({'message': 'Password updated.'})
+
+
+# ---- Device verification & passkeys ----
+
+
+def _get_client_ip(request):
+    xff = (request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')[0].strip()
+    if xff:
+        return xff
+    return request.META.get('REMOTE_ADDR', '') or ''
+
+
+def _parse_device_label(request):
+    from .device_utils import parse_user_agent_label
+    ua = request.META.get('HTTP_USER_AGENT', '') or ''
+    model = request.META.get('HTTP_SEC_CH_UA_MODEL', '') or ''
+    return parse_user_agent_label(ua, model)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login(request):
+    """Sign in with email/password -> { token, user } or {status: verification_required}"""
+    email = (request.data.get('email') or '').strip().lower()
+    password = request.data.get('password') or ''
+    device_id = (request.headers.get('X-Device-Id') or request.data.get('device_id') or '').strip()
+
+    if not email or not password:
+        return Response(
+            {'message': 'Email and password are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit by IP
+    ip = _get_client_ip(request)
+    key = f'login_rl:{ip}:{email}'
+    attempts = cache.get(key, 0)
+    if attempts >= 10:
+        return Response({'message': 'Too many attempts. Try again later.'}, status=429)
+    cache.set(key, attempts + 1, 300)
+
+    user = User.objects.filter(email=email).first()
+    if not user or not user.check_password(password):
+        if user is not None:
+            try:
+                from monitoring.alerts import notify_login_failure
+
+                notify_login_failure(user.pk)
+            except Exception:
+                pass
+        return Response(
+            {'message': 'Invalid email or password.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    profile = _with_profile(user)
+    if profile.status != 'active':
+        return Response(
+            {'message': f'This account is {profile.status}.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if device_id:
+        trusted = TrustedDevice.objects.filter(user=user, device_id=device_id, is_trusted=True).first()
+        if trusted:
+            trusted.last_ip = ip
+            trusted.save(update_fields=['last_ip', 'last_seen_at'])
+            token, _ = Token.objects.get_or_create(user=user)
+            try:
+                SecurityEvent.objects.create(user=user, event_type='login_trusted', details={'device_id': device_id}, ip_address=ip)
+            except Exception:
+                pass
+            try:
+                send_template_email(
+                    'login_alert',
+                    user.email,
+                    {
+                        'name': user.first_name or 'there',
+                        'ip_address': ip or 'Unknown',
+                        'user_agent': request.META.get('HTTP_USER_AGENT', '') or 'Unknown',
+                        'login_time': timezone.localtime(),
+                    },
+                    background=True,
+                )
+            except Exception:
+                pass
+            return Response({'token': token.key, 'user': serialize_user(user)})
+
+    # Need verification
+    code = get_random_string(6, allowed_chars='0123456789')
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+    LoginVerification.objects.filter(user=user, device_id=device_id, used=False).update(used=True)
+    LoginVerification.objects.create(
+        user=user,
+        device_id=device_id,
+        code_hash=code_hash,
+        expires_at=timezone.now() + timedelta(minutes=10),
+    )
+    try:
+        send_template_email(
+            'welcome',
+            user.email,
+            {
+                'name': user.first_name or 'there',
+                'action_label': 'Verify Device',
+                'message': f'Your verification code is: {code}. It expires in 10 minutes.',
+            },
+            background=True,
+        )
+    except Exception:
+        pass
+    try:
+        SecurityEvent.objects.create(user=user, event_type='login_new_device', details={'device_id': device_id}, ip_address=ip)
+    except Exception:
+        pass
+    return Response({'status': 'verification_required', 'email': email})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_device(request):
+    email = (request.data.get('email') or '').strip().lower()
+    device_id = (request.data.get('device_id') or request.headers.get('X-Device-Id') or '').strip()
+    code = (request.data.get('code') or '').strip()
+    ip = _get_client_ip(request)
+
+    key = f'verify_rl:{ip}:{email}'
+    attempts = cache.get(key, 0)
+    if attempts >= 10:
+        return Response({'message': 'Too many attempts. Try again later.'}, status=429)
+    cache.set(key, attempts + 1, 300)
+
+    if not email or not device_id or not code:
+        return Response({'message': 'Invalid request.'}, status=400)
+
+    user = User.objects.filter(email=email).first()
+    if not user:
+        return Response({'message': 'Invalid code.'}, status=400)
+
+    verification = (
+        LoginVerification.objects.filter(user=user, device_id=device_id, used=False)
+        .order_by('-created_at')
+        .first()
+    )
+    if not verification:
+        return Response({'message': 'Invalid code.'}, status=400)
+    if verification.expires_at < timezone.now():
+        return Response({'message': 'Code expired.'}, status=400)
+    if verification.attempts >= 5:
+        return Response({'message': 'Too many attempts.'}, status=400)
+
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+    if code_hash != verification.code_hash:
+        verification.attempts += 1
+        verification.save(update_fields=['attempts'])
+        return Response({'message': 'Invalid code.'}, status=400)
+
+    verification.used = True
+    verification.save(update_fields=['used'])
+
+    device, _ = TrustedDevice.objects.update_or_create(
+        user=user,
+        device_id=device_id,
+        defaults={
+            'label': _parse_device_label(request),
+            'ip_address': ip,
+            'last_ip': ip,
+            'is_trusted': True,
+        },
+    )
+    try:
+        SecurityEvent.objects.create(user=user, event_type='device_trusted', details={'device_id': device_id}, ip_address=ip)
+    except Exception:
+        pass
+    try:
+        send_template_email(
+            'welcome',
+            user.email,
+            {
+                'name': user.first_name or 'there',
+                'action_label': 'View Account',
+                'message': f'A new device was trusted: {device.label}.',
+            },
+            background=True,
+        )
+    except Exception:
+        pass
+
+    token, _ = Token.objects.get_or_create(user=user)
+    return Response({'token': token.key, 'user': serialize_user(user)})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def resend_verification(request):
+    email = (request.data.get('email') or '').strip().lower()
+    device_id = (request.data.get('device_id') or request.headers.get('X-Device-Id') or '').strip()
+    ip = _get_client_ip(request)
+
+    key = f'resend_rl:{ip}:{email}'
+    attempts = cache.get(key, 0)
+    if attempts >= 5:
+        return Response({'message': 'Too many attempts. Try again later.'}, status=429)
+    cache.set(key, attempts + 1, 600)
+
+    user = User.objects.filter(email=email).first()
+    if not user or not device_id:
+        return Response({'message': 'If an account exists, a code has been sent.'})
+
+    code = get_random_string(6, allowed_chars='0123456789')
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+    LoginVerification.objects.filter(user=user, device_id=device_id, used=False).update(used=True)
+    LoginVerification.objects.create(
+        user=user,
+        device_id=device_id,
+        code_hash=code_hash,
+        expires_at=timezone.now() + timedelta(minutes=10),
+    )
+    try:
+        send_template_email(
+            'welcome',
+            user.email,
+            {
+                'name': user.first_name or 'there',
+                'action_label': 'Verify Device',
+                'message': f'Your verification code is: {code}. It expires in 10 minutes.',
+            },
+            background=True,
+        )
+    except Exception:
+        pass
+    return Response({'message': 'If an account exists, a code has been sent.'})
+
+
+@api_view(['GET'])
+@authentication_classes([BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def list_devices(request):
+    devices = TrustedDevice.objects.filter(user=request.user)
+    data = []
+    for d in devices:
+        data.append({
+            'id': d.id,
+            'device_id': d.device_id,
+            'label': d.label,
+            'ip_address': d.last_ip or d.ip_address,
+            'last_seen_at': d.last_seen_at,
+            'is_trusted': d.is_trusted,
+            'created_at': d.created_at,
+        })
+    return Response({'devices': data})
+
+
+@api_view(['DELETE'])
+@authentication_classes([BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def revoke_device(request, device_id):
+    TrustedDevice.objects.filter(user=request.user, id=device_id).delete()
+    return Response({'message': 'Device removed.'})
