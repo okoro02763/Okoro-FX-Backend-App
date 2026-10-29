@@ -1,7 +1,12 @@
+import uuid
+from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import models
 
 # Create your models here.
 from django.utils import timezone
+
+User = get_user_model()
 
 class CurrencyPair(models.Model):
     symbol = models.CharField(max_length=10, unique=True)
@@ -82,7 +87,7 @@ class DerivAccount(models.Model):
 class PasswordResetToken(models.Model):
     """One-time token used to reset a user's password."""
     user = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='password_reset_tokens',
     )
@@ -140,7 +145,7 @@ class Profile(models.Model):
     ]
 
     user = models.OneToOneField(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='profile',
     )
@@ -163,7 +168,7 @@ class Profile(models.Model):
     )
     reward_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     reffered_by = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -178,12 +183,12 @@ class Profile(models.Model):
 class Referral(models.Model):
     """Tracks a successful referral and the rewards issued to both parties."""
     referrer = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='referrals_made',
     )
     referee = models.OneToOneField(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='referral',
     )
@@ -199,7 +204,7 @@ class Referral(models.Model):
 class AuditLog(models.Model):
     """Record of admin actions for the audit trail."""
     actor = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -227,7 +232,7 @@ class FraudResult(models.Model):
     ]
 
     user = models.OneToOneField(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='fraud',
     )
@@ -251,7 +256,7 @@ class Withdrawal(models.Model):
     ]
 
     user = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='withdrawals',
     )
@@ -266,7 +271,7 @@ class Withdrawal(models.Model):
     )
     review_note = models.TextField(blank=True, default='')
     reviewed_by = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -298,7 +303,7 @@ class IdentityVerification(models.Model):
     ]
 
     user = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='identity_verifications',
     )
@@ -310,7 +315,7 @@ class IdentityVerification(models.Model):
     )
     review_note = models.TextField(blank=True, default='')
     reviewed_by = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -332,7 +337,7 @@ class Invite(models.Model):
     email = models.EmailField(unique=True, db_index=True)
     token = models.CharField(max_length=64, unique=True)
     invited_by = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -361,7 +366,7 @@ class Payment(models.Model):
     ]
 
     user = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='payments',
     )
@@ -389,7 +394,7 @@ class Payment(models.Model):
 
 class TrustedDevice(models.Model):
     user = models.ForeignKey(
-        'auth.User', on_delete=models.CASCADE, related_name='trusted_devices'
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='trusted_devices'
     )
     device_id = models.CharField(max_length=64)
     label = models.CharField(max_length=255, blank=True, default='')
@@ -410,7 +415,7 @@ class TrustedDevice(models.Model):
 
 class LoginVerification(models.Model):
     user = models.ForeignKey(
-        'auth.User', on_delete=models.CASCADE, related_name='login_verifications'
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='login_verifications'
     )
     device_id = models.CharField(max_length=64)
     code_hash = models.CharField(max_length=128)
@@ -425,7 +430,7 @@ class LoginVerification(models.Model):
 
 class WebAuthnCredential(models.Model):
     user = models.ForeignKey(
-        'auth.User', on_delete=models.CASCADE, related_name='webauthn_credentials'
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='webauthn_credentials'
     )
     credential_id = models.TextField()
     public_key = models.TextField()
@@ -439,7 +444,7 @@ class WebAuthnCredential(models.Model):
 
 class SecurityEvent(models.Model):
     user = models.ForeignKey(
-        'auth.User', on_delete=models.CASCADE, related_name='security_events'
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='security_events'
     )
     event_type = models.CharField(max_length=60)
     details = models.JSONField(default=dict, blank=True)

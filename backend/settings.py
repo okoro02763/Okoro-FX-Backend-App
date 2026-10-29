@@ -172,6 +172,7 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'corsheaders',
     'channels',
+    'users',
 ]
 
 MIDDLEWARE = [
@@ -480,6 +481,7 @@ MIN_WITHDRAWAL = Decimal(os.getenv('MIN_WITHDRAWAL', '1000'))
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+AUTH_USER_MODEL = 'users.User'
 
 # Deriv API Configuration
 DERIV_API_TOKEN = os.getenv('DERIV_API_TOKEN')

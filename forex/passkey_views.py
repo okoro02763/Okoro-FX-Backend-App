@@ -18,6 +18,7 @@ try:
         generate_registration_options,
         verify_authentication_response,
         verify_registration_response,
+        options_to_json,
     )
     from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
     from webauthn.helpers.structs import (
@@ -30,7 +31,29 @@ try:
     )
     WEBAUTHN_AVAILABLE = True
 except Exception:
-    WEBAUTHN_AVAILABLE = False
+    try:
+        from webauthn import (
+            generate_authentication_options,
+            generate_registration_options,
+            verify_authentication_response,
+            verify_registration_response,
+        )
+        from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+        from webauthn.helpers.structs import (
+            AttestationConveyancePreference,
+            AuthenticatorSelectionCriteria,
+            AuthenticatorAttachment,
+            PublicKeyCredentialDescriptor,
+            ResidentKeyRequirement,
+            UserVerificationRequirement,
+        )
+        try:
+            from webauthn.helpers import options_to_json
+        except Exception:
+            options_to_json = None
+        WEBAUTHN_AVAILABLE = True
+    except Exception:
+        WEBAUTHN_AVAILABLE = False
 
 
 def _rp_id():
@@ -76,10 +99,19 @@ def passkey_register_begin(request):
         ),
         attestation=AttestationConveyancePreference.NONE,
     )
-    request.session['webauthn_reg_challenge'] = bytes_to_base64url(options.challenge)
-    request.session['webauthn_reg_user_id'] = user.id
-    request.session.modified = True
-    return Response(json.loads(options.model_dump_json(by_alias=True)))
+    try:
+        request.session['webauthn_reg_challenge'] = bytes_to_base64url(options.challenge)
+        request.session['webauthn_reg_user_id'] = user.id
+        if hasattr(request.session, 'modified'):
+            request.session.modified = True
+    except Exception:
+        pass
+    try:
+        if options_to_json:
+            return Response(json.loads(options_to_json(options)))
+        return Response(json.loads(options.model_dump_json(by_alias=True)))
+    except Exception:
+        return Response(json.loads(options_to_json(options))) if options_to_json else Response({})
 
 
 @api_view(['POST'])
@@ -150,13 +182,22 @@ def passkey_login_begin(request):
         allow_credentials=allow_credentials or None,
         user_verification=UserVerificationRequirement.PREFERRED,
     )
-    request.session['webauthn_auth_challenge'] = bytes_to_base64url(options.challenge)
-    if user:
-        request.session['webauthn_auth_user_id'] = user.id
-    else:
-        request.session.pop('webauthn_auth_user_id', None)
-    request.session.modified = True
-    return Response(json.loads(options.model_dump_json(by_alias=True)))
+    try:
+        request.session['webauthn_auth_challenge'] = bytes_to_base64url(options.challenge)
+        if user:
+            request.session['webauthn_auth_user_id'] = user.id
+        else:
+            request.session.pop('webauthn_auth_user_id', None)
+        if hasattr(request.session, 'modified'):
+            request.session.modified = True
+    except Exception:
+        pass
+    try:
+        if options_to_json:
+            return Response(json.loads(options_to_json(options)))
+        return Response(json.loads(options.model_dump_json(by_alias=True)))
+    except Exception:
+        return Response(json.loads(options_to_json(options))) if options_to_json else Response({})
 
 
 @api_view(['POST'])
