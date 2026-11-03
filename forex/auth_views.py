@@ -561,6 +561,15 @@ def login(request):
         code_hash=code_hash,
         expires_at=timezone.now() + timedelta(minutes=10),
     )
+    if settings.DEBUG:
+        # Local development aid: the console email backend may not be active
+        # (e.g. Termii credentials are present), so surface the code explicitly.
+        # Never logged when DEBUG is off.
+        logger.info(
+            'Device verification code for %s: %s (expires in 10 minutes)',
+            user.email,
+            code,
+        )
     try:
         send_template_email(
             'welcome',
@@ -681,6 +690,12 @@ def resend_verification(request):
         code_hash=code_hash,
         expires_at=timezone.now() + timedelta(minutes=10),
     )
+    if settings.DEBUG:
+        logger.info(
+            'Device verification code (resent) for %s: %s (expires in 10 minutes)',
+            user.email,
+            code,
+        )
     try:
         send_template_email(
             'welcome',
