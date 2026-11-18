@@ -28,6 +28,7 @@ try:
         AttestationConveyancePreference,
         AuthenticatorSelectionCriteria,
         PublicKeyCredentialDescriptor,
+        PublicKeyCredentialHint,
         ResidentKeyRequirement,
         UserVerificationRequirement,
     )
@@ -45,6 +46,7 @@ except Exception:
             AttestationConveyancePreference,
             AuthenticatorSelectionCriteria,
             PublicKeyCredentialDescriptor,
+            PublicKeyCredentialHint,
             ResidentKeyRequirement,
             UserVerificationRequirement,
         )
@@ -191,6 +193,14 @@ def passkey_register_begin(request):
             # browser surfaced as "timed out or was not allowed".
         ),
         timeout=120000,
+        # Tell the browser every authenticator family is acceptable: this
+        # device's biometrics (Windows Hello / Touch ID), a cross-device phone
+        # passkey, or a roaming security key.
+        hints=[
+            PublicKeyCredentialHint.CLIENT_DEVICE,
+            PublicKeyCredentialHint.HYBRID,
+            PublicKeyCredentialHint.SECURITY_KEY,
+        ],
         attestation=AttestationConveyancePreference.NONE,
     )
     challenge_b64 = bytes_to_base64url(options.challenge)
@@ -285,14 +295,42 @@ def passkey_login_begin(request):
     email = (request.data.get('email') or '').strip().lower()
     user = None
     allow_credentials = []
+    no_passkey_message = (
+        'No passkey is registered for this email. Sign in with your password, '
+        'then add a passkey under Devices.'
+    )
     if email:
         user = User.objects.filter(email=email).first()
-        if user:
-            for cred in WebAuthnCredential.objects.filter(user=user):
-                try:
-                    allow_credentials.append(PublicKeyCredentialDescriptor(id=base64url_to_bytes(cred.credential_id)))
-                except Exception:
-                    continue
+        credentials = (
+            list(WebAuthnCredential.objects.filter(user=user)) if user else []
+        )
+        if not credentials:
+            # Starting a ceremony with no credentials makes the browser show a
+            # Windows Hello / Touch ID prompt that can only fail, which the
+            # browser reports as "the operation either timed out or was not
+            # allowed". Answer clearly instead of prompting for nothing.
+            return Response({'message': no_passkey_message}, status=400)
+        for cred in credentials:
+            try:
+                allow_credentials.append(
+                    PublicKeyCredentialDescriptor(
+                        id=base64url_to_bytes(cred.credential_id)
+                    )
+                )
+            except Exception:
+                continue
+        if not allow_credentials:
+            return Response({'message': no_passkey_message}, status=400)
+    elif not WebAuthnCredential.objects.exists():
+        return Response(
+            {
+                'message': (
+                    'No passkeys are registered yet. Sign in with your password, '
+                    'then add one under Devices.'
+                )
+            },
+            status=400,
+        )
     options = generate_authentication_options(
         rp_id=_rp_id_for_request(request),
         allow_credentials=allow_credentials or None,
