@@ -149,17 +149,16 @@ if DEBUG:
         if _dev_origin not in WEBAUTHN_EXPECTED_ORIGINS:
             WEBAUTHN_EXPECTED_ORIGINS.append(_dev_origin)
 if not WEBAUTHN_RP_ID:
-    if DEBUG:
-        # WebAuthn RP IDs must be a suffix of the page origin, so the deployed
-        # frontend's domain cannot be used while testing on localhost.
-        WEBAUTHN_RP_ID = 'localhost'
-    else:
-        try:
-            from urllib.parse import urlparse
+    # Derive the RP ID from the configured origin, never from DEBUG: a
+    # production process that accidentally has DEBUG=True must not advertise
+    # "localhost" to a real domain. The passkey views additionally prefer the
+    # allow-listed request Origin, which is what actually has to match.
+    try:
+        from urllib.parse import urlparse
 
-            WEBAUTHN_RP_ID = urlparse(WEBAUTHN_ORIGIN).hostname or 'localhost'
-        except Exception:
-            WEBAUTHN_RP_ID = 'localhost'
+        WEBAUTHN_RP_ID = urlparse(WEBAUTHN_ORIGIN).hostname or 'localhost'
+    except Exception:
+        WEBAUTHN_RP_ID = 'localhost'
 # Address shown in the support section and footer of rendered email templates.
 DEFAULT_SUPPORT_EMAIL = os.getenv('DEFAULT_SUPPORT_EMAIL', 'support@okorofx.com')
 # Optional hosted copy of the brand logo used in the email header. Only

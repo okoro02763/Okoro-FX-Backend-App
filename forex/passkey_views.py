@@ -1,4 +1,6 @@
 import json
+from urllib.parse import urlparse
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import signing
@@ -66,11 +68,58 @@ def _rp_name():
 
 
 def _expected_origins():
-    origins = getattr(settings, 'WEBAUTHN_EXPECTED_ORIGINS', None)
-    if origins:
-        return origins
-    origin = getattr(settings, 'WEBAUTHN_ORIGIN', None) or getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
-    return [origin]
+    """Origins allowed to run a WebAuthn ceremony.
+
+    A browser only accepts an RP ID that equals, or is a registrable suffix of,
+    the page's own origin. The origins trusted to call this API (CORS) are
+    therefore also the origins trusted for passkeys. Merging them in means a
+    deployment cannot advertise ``localhost`` to a real frontend just because
+    ``FRONTEND_URL`` was left unset.
+    """
+    origins = [
+        origin.rstrip('/')
+        for origin in (getattr(settings, 'WEBAUTHN_EXPECTED_ORIGINS', None) or [])
+        if origin
+    ]
+    if not origins:
+        origin = (
+            getattr(settings, 'WEBAUTHN_ORIGIN', None)
+            or getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
+        )
+        origins = [origin.rstrip('/')]
+    for origin in getattr(settings, 'CORS_ALLOWED_ORIGINS', None) or []:
+        origin = (origin or '').rstrip('/')
+        if origin and origin not in origins:
+            origins.append(origin)
+    return origins
+
+
+def _request_origin(request):
+    """The origin of the page that made this request, if the browser sent it."""
+    origin = (request.headers.get('Origin') or '').rstrip('/')
+    if origin:
+        return origin
+    referer = request.headers.get('Referer') or ''
+    if referer:
+        parsed = urlparse(referer)
+        if parsed.scheme and parsed.netloc:
+            return f'{parsed.scheme}://{parsed.netloc}'
+    return ''
+
+
+def _rp_id_for_request(request):
+    """Return the RP ID matching the page, when its origin is allow-listed.
+
+    WebAuthn requires the RP ID to be the page's host or a registrable suffix
+    of it. Deriving it from the (allow-listed) Origin avoids the classic
+    "rpId=localhost on a real domain" failure when a deployment forgets to set
+    FRONTEND_URL. An unknown origin falls back to the configured RP ID, so the
+    browser still rejects it rather than silently trusting the caller.
+    """
+    origin = _request_origin(request)
+    if origin and origin in _expected_origins():
+        return urlparse(origin).hostname or _rp_id()
+    return _rp_id()
 
 
 # WebAuthn state is signed and returned to the client instead of relying on a
@@ -127,7 +176,7 @@ def passkey_register_begin(request):
         except Exception:
             continue
     options = generate_registration_options(
-        rp_id=_rp_id(),
+        rp_id=_rp_id_for_request(request),
         rp_name=_rp_name(),
         user_id=str(user.id).encode('utf-8'),
         user_name=user.email or user.username,
@@ -193,7 +242,7 @@ def passkey_register_finish(request):
             credential=body,
             expected_challenge=base64url_to_bytes(challenge_b64),
             expected_origin=_expected_origins(),
-            expected_rp_id=_rp_id(),
+            expected_rp_id=_rp_id_for_request(request),
         )
         credential_id = bytes_to_base64url(verification.credential_id)
         if WebAuthnCredential.objects.filter(credential_id=credential_id).exists():
@@ -241,7 +290,7 @@ def passkey_login_begin(request):
                 except Exception:
                     continue
     options = generate_authentication_options(
-        rp_id=_rp_id(),
+        rp_id=_rp_id_for_request(request),
         allow_credentials=allow_credentials or None,
         user_verification=UserVerificationRequirement.PREFERRED,
     )
@@ -303,7 +352,7 @@ def passkey_login_finish(request):
             credential=body,
             expected_challenge=base64url_to_bytes(challenge_b64),
             expected_origin=_expected_origins(),
-            expected_rp_id=_rp_id(),
+            expected_rp_id=_rp_id_for_request(request),
             credential_public_key=base64url_to_bytes(cred.public_key),
             credential_current_sign_count=cred.sign_count,
         )
