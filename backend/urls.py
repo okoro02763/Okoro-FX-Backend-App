@@ -25,6 +25,11 @@ urlpatterns = [
     # preflight), so "/api/health/" would otherwise be a 404.
     path('api/health', health, name='health'),
     path('api/health/', health, name='health-slash'),
+    # Bare aliases for uptime probes and local tooling that assume "/health".
+    # They hit the same readiness check, so a probe pointed at the wrong path
+    # reports a real status instead of a misleading 404.
+    path('health', health, name='health-bare'),
+    path('health/', health, name='health-bare-slash'),
     path('api/', include('forex.urls')),
     path('api/market/', include('market.urls')),
     path('api/trading/', include('trading.urls')),
