@@ -136,13 +136,30 @@ WEBAUTHN_EXPECTED_ORIGINS = [
 ]
 if not WEBAUTHN_EXPECTED_ORIGINS:
     WEBAUTHN_EXPECTED_ORIGINS = [WEBAUTHN_ORIGIN]
+if DEBUG:
+    # Local development serves the SPA from localhost/127.0.0.1 while
+    # FRONTEND_URL still points at the deployed site. Accept both dev origins
+    # so biometrics can be tested without editing .env.
+    for _dev_origin in (
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+    ):
+        if _dev_origin not in WEBAUTHN_EXPECTED_ORIGINS:
+            WEBAUTHN_EXPECTED_ORIGINS.append(_dev_origin)
 if not WEBAUTHN_RP_ID:
-    try:
-        from urllib.parse import urlparse
-
-        WEBAUTHN_RP_ID = urlparse(WEBAUTHN_ORIGIN).hostname or 'localhost'
-    except Exception:
+    if DEBUG:
+        # WebAuthn RP IDs must be a suffix of the page origin, so the deployed
+        # frontend's domain cannot be used while testing on localhost.
         WEBAUTHN_RP_ID = 'localhost'
+    else:
+        try:
+            from urllib.parse import urlparse
+
+            WEBAUTHN_RP_ID = urlparse(WEBAUTHN_ORIGIN).hostname or 'localhost'
+        except Exception:
+            WEBAUTHN_RP_ID = 'localhost'
 # Address shown in the support section and footer of rendered email templates.
 DEFAULT_SUPPORT_EMAIL = os.getenv('DEFAULT_SUPPORT_EMAIL', 'support@okorofx.com')
 # Optional hosted copy of the brand logo used in the email header. Only

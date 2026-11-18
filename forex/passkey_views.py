@@ -1,6 +1,7 @@
 import json
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core import signing
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -72,6 +73,46 @@ def _expected_origins():
     return [origin]
 
 
+# WebAuthn state is signed and returned to the client instead of relying on a
+# server-side session. The frontend and backend are on different domains in
+# production, so the session cookie is a third-party cookie: browsers drop it
+# (SameSite=Lax by default), and even with credentials enabled Safari/Chrome
+# increasingly block it. It also breaks when more than one worker handles the
+# two halves of the ceremony. A short-lived signed challenge is stateless and
+# works across origins, instances and cookie policies.
+_WEBAUTHN_STATE_SALT = 'forex.webauthn.state'
+_WEBAUTHN_STATE_MAX_AGE = 300
+
+
+def _issue_state(payload):
+    return signing.dumps(payload, salt=_WEBAUTHN_STATE_SALT, compress=True)
+
+
+def _read_state(token):
+    if not token:
+        return None
+    try:
+        return signing.loads(
+            token, salt=_WEBAUTHN_STATE_SALT, max_age=_WEBAUTHN_STATE_MAX_AGE
+        )
+    except Exception:
+        return None
+
+
+def _options_response(options, state):
+    """Serialise WebAuthn options and attach the signed challenge state."""
+    try:
+        if options_to_json:
+            data = json.loads(options_to_json(options))
+        else:
+            data = json.loads(options.model_dump_json(by_alias=True))
+    except Exception:
+        data = json.loads(options_to_json(options)) if options_to_json else {}
+    if state:
+        data['state'] = state
+    return Response(data)
+
+
 @api_view(['POST'])
 @authentication_classes([BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
@@ -99,19 +140,22 @@ def passkey_register_begin(request):
         ),
         attestation=AttestationConveyancePreference.NONE,
     )
+    challenge_b64 = bytes_to_base64url(options.challenge)
+    state = _issue_state(
+        {
+            'kind': 'registration',
+            'challenge': challenge_b64,
+            'user_id': str(user.id),
+        }
+    )
     try:
-        request.session['webauthn_reg_challenge'] = bytes_to_base64url(options.challenge)
-        request.session['webauthn_reg_user_id'] = user.id
+        request.session['webauthn_reg_challenge'] = challenge_b64
+        request.session['webauthn_reg_user_id'] = str(user.id)
         if hasattr(request.session, 'modified'):
             request.session.modified = True
     except Exception:
         pass
-    try:
-        if options_to_json:
-            return Response(json.loads(options_to_json(options)))
-        return Response(json.loads(options.model_dump_json(by_alias=True)))
-    except Exception:
-        return Response(json.loads(options_to_json(options))) if options_to_json else Response({})
+    return _options_response(options, state)
 
 
 @api_view(['POST'])
@@ -121,11 +165,30 @@ def passkey_register_finish(request):
     if not WEBAUTHN_AVAILABLE:
         return Response({'message': 'Passkeys are not available on this server.'}, status=503)
     user = request.user
-    challenge_b64 = request.session.get('webauthn_reg_challenge')
-    if not challenge_b64 or request.session.get('webauthn_reg_user_id') != user.id:
-        return Response({'message': 'Invalid or expired passkey registration session.'}, status=400)
+    state = _read_state(request.data.get('state'))
+    if state and state.get('kind') == 'registration':
+        if state.get('user_id') != str(user.id):
+            return Response(
+                {'message': 'Invalid or expired passkey registration session.'},
+                status=400,
+            )
+        challenge_b64 = state.get('challenge')
+    else:
+        challenge_b64 = request.session.get('webauthn_reg_challenge')
+        if (
+            not challenge_b64
+            or request.session.get('webauthn_reg_user_id') != str(user.id)
+        ):
+            return Response(
+                {'message': 'Invalid or expired passkey registration session.'},
+                status=400,
+            )
     try:
-        body = request.data
+        body = {
+            key: value
+            for key, value in request.data.items()
+            if key not in ('state', 'device_label')
+        }
         verification = verify_registration_response(
             credential=body,
             expected_challenge=base64url_to_bytes(challenge_b64),
@@ -182,22 +245,25 @@ def passkey_login_begin(request):
         allow_credentials=allow_credentials or None,
         user_verification=UserVerificationRequirement.PREFERRED,
     )
+    challenge_b64 = bytes_to_base64url(options.challenge)
+    state = _issue_state(
+        {
+            'kind': 'authentication',
+            'challenge': challenge_b64,
+            'user_id': str(user.id) if user else None,
+        }
+    )
     try:
-        request.session['webauthn_auth_challenge'] = bytes_to_base64url(options.challenge)
+        request.session['webauthn_auth_challenge'] = challenge_b64
         if user:
-            request.session['webauthn_auth_user_id'] = user.id
+            request.session['webauthn_auth_user_id'] = str(user.id)
         else:
             request.session.pop('webauthn_auth_user_id', None)
         if hasattr(request.session, 'modified'):
             request.session.modified = True
     except Exception:
         pass
-    try:
-        if options_to_json:
-            return Response(json.loads(options_to_json(options)))
-        return Response(json.loads(options.model_dump_json(by_alias=True)))
-    except Exception:
-        return Response(json.loads(options_to_json(options))) if options_to_json else Response({})
+    return _options_response(options, state)
 
 
 @api_view(['POST'])
@@ -205,11 +271,19 @@ def passkey_login_begin(request):
 def passkey_login_finish(request):
     if not WEBAUTHN_AVAILABLE:
         return Response({'message': 'Passkeys are not available on this server.'}, status=503)
-    challenge_b64 = request.session.get('webauthn_auth_challenge')
+    state = _read_state(request.data.get('state'))
+    if state and state.get('kind') == 'authentication':
+        challenge_b64 = state.get('challenge')
+    else:
+        challenge_b64 = request.session.get('webauthn_auth_challenge')
     if not challenge_b64:
         return Response({'message': 'Invalid or expired passkey login session.'}, status=400)
     try:
-        body = request.data
+        body = {
+            key: value
+            for key, value in request.data.items()
+            if key != 'state'
+        }
         cred_id = body.get('id') or body.get('rawId')
         if not cred_id:
             return Response({'message': 'Invalid credential.'}, status=400)
