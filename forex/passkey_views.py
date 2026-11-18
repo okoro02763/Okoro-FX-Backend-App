@@ -27,7 +27,6 @@ try:
     from webauthn.helpers.structs import (
         AttestationConveyancePreference,
         AuthenticatorSelectionCriteria,
-        AuthenticatorAttachment,
         PublicKeyCredentialDescriptor,
         ResidentKeyRequirement,
         UserVerificationRequirement,
@@ -45,7 +44,6 @@ except Exception:
         from webauthn.helpers.structs import (
             AttestationConveyancePreference,
             AuthenticatorSelectionCriteria,
-            AuthenticatorAttachment,
             PublicKeyCredentialDescriptor,
             ResidentKeyRequirement,
             UserVerificationRequirement,
@@ -183,10 +181,16 @@ def passkey_register_begin(request):
         user_display_name=user.first_name or user.email or user.username,
         exclude_credentials=exclude or None,
         authenticator_selection=AuthenticatorSelectionCriteria(
-            resident_key=ResidentKeyRequirement.PREFERRED,
+            # "required" makes the credential discoverable, which is what lets
+            # "Sign in with Passkey" work without typing an email first.
+            resident_key=ResidentKeyRequirement.REQUIRED,
             user_verification=UserVerificationRequirement.PREFERRED,
-            authenticator_attachment=AuthenticatorAttachment.PLATFORM,
+            # No authenticator_attachment: the browser may offer Windows Hello /
+            # Touch ID, a roaming security key, or a phone passkey. Pinning this
+            # to PLATFORM made security keys and phones unavailable, which the
+            # browser surfaced as "timed out or was not allowed".
         ),
+        timeout=120000,
         attestation=AttestationConveyancePreference.NONE,
     )
     challenge_b64 = bytes_to_base64url(options.challenge)
@@ -293,6 +297,9 @@ def passkey_login_begin(request):
         rp_id=_rp_id_for_request(request),
         allow_credentials=allow_credentials or None,
         user_verification=UserVerificationRequirement.PREFERRED,
+        # Cross-device (phone) flows include a QR scan and can take longer than
+        # the 60s default.
+        timeout=120000,
     )
     challenge_b64 = bytes_to_base64url(options.challenge)
     state = _issue_state(
