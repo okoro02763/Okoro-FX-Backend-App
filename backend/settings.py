@@ -382,6 +382,18 @@ DATABASES = {
     )
 }
 _db_engine = str(DATABASES['default'].get('ENGINE') or '')
+_db_host = str(DATABASES['default'].get('HOST') or '')
+_db_options = DATABASES['default'].setdefault('OPTIONS', {})
+# Neon requires TLS. The URL normally carries sslmode=require, but default it
+# here too so a hand-edited URL cannot silently connect in plaintext.
+if _db_host.endswith('.neon.tech') and not _db_options.get('sslmode'):
+    _db_options['sslmode'] = 'require'
+# Neon's pooled endpoint is PgBouncer in transaction mode, which does not
+# support named (server-side) cursors. Django only uses them for QuerySet
+# .iterator(); disabling them on the pooled host avoids "cursor does not exist"
+# errors under load. Direct connections keep the default.
+if '-pooler' in _db_host:
+    DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
 # SQLite has no row-level locking, so select_for_update() silently does
 # nothing. A money app must never fall back to it unnoticed. (dj_database_url
 # returns an empty dict when DATABASE_URL is set but blank, hence the "" case.)
